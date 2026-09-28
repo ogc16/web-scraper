@@ -96,6 +96,17 @@ ResearchSpec ──▶ PlanRequest ──▶ [str]                    # stage 1
              ──▶ ResearchReport                            # stage 8
 ```
 
+Stage 1 runs again — a re-plan — when the candidate URLs for a round are
+exhausted and `_uncovered` still reports a required field short of
+`min_independent_sources` domains. The planner receives `uncovered_fields` and
+`existing_queries` so it targets the gap instead of repeating round one, and
+`Budget.max_replans` caps how many extra passes a run may buy (default 2; the
+`tiny` preset sets 0, since a second planner call is unaffordable there).
+Re-planned hits are filtered against `seen_urls`, so a re-plan that returns the
+same URL ends the run rather than refetching it and inflating apparent support.
+`_covered` is defined as `not _uncovered(...)` so the stop condition and the
+re-plan trigger can never disagree about what the run still needs.
+
 ## Key decisions
 
 **Only `net/http.py` opens a socket.** Everything else consumes its results. One
@@ -130,7 +141,7 @@ so, with the notes explaining why.
 | DNS rebinding | host resolved and validated before the request; the answer is re-resolved with the cache bypassed immediately before the socket opens and must be a subset of the approved set, on every hop | `net/guard.py`, `net/http.py` |
 | Prompt injection via page text | page text fenced in a delimited block, declared untrusted, model instructed never to obey it; output schema validated and every quote re-checked against the source | `providers/llm_openai.py` |
 | Hallucinated values | quotes must appear verbatim in the page or the value is dropped | `providers/llm_openai.py` |
-| Unbounded spend | six budgets, checked before every stage | `agent/loop.py` |
+| Unbounded spend | six budgets plus the re-plan ceiling, checked before every stage | `agent/loop.py` |
 | Accidentally ignoring robots | enforced on every hop, including cross-origin redirects | `net/robots.py` |
 | Secret leakage | redacting log filter; `Config.redacted()` masks credentials | `observability.py`, `config.py` |
 | Malicious redirect loops | bounded `max_redirects`, then `FetchError` | `net/http.py` |

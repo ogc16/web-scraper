@@ -59,6 +59,7 @@ class Budget:
     max_llm_calls: int = 24
     max_wall_seconds: float = 120.0
     max_bytes_downloaded: int = 12 * 1024 * 1024
+    max_replans: int = 2
 
     def __post_init__(self) -> None:
         for name in (
@@ -66,6 +67,7 @@ class Budget:
             "max_pages",
             "max_llm_calls",
             "max_bytes_downloaded",
+            "max_replans",
         ):
             if getattr(self, name) < 0:
                 msg = f"{name} must be >= 0, got {getattr(self, name)}"
@@ -78,7 +80,15 @@ class Budget:
     def preset(cls, name: str) -> Budget:
         """Return a named preset: ``tiny``, ``standard``, ``deep`` or ``none``."""
         presets: dict[str, Budget] = {
-            "tiny": cls(max_search_queries=2, max_pages=4, max_llm_calls=6, max_wall_seconds=30.0),
+            "tiny": cls(
+                max_search_queries=2,
+                max_pages=4,
+                max_llm_calls=6,
+                max_wall_seconds=30.0,
+                # One pass only: a tiny budget cannot afford a second planner
+                # call, and re-planning is what the extra calls buy.
+                max_replans=0,
+            ),
             "standard": cls(),
             "deep": cls(
                 max_search_queries=25,
@@ -93,6 +103,7 @@ class Budget:
                 max_llm_calls=10_000,
                 max_wall_seconds=86_400.0,
                 max_bytes_downloaded=2 * 1024 * 1024 * 1024,
+                max_replans=10,
             ),
         }
         try:
@@ -108,6 +119,7 @@ class Budget:
             "max_llm_calls": self.max_llm_calls,
             "max_wall_seconds": self.max_wall_seconds,
             "max_bytes_downloaded": self.max_bytes_downloaded,
+            "max_replans": self.max_replans,
         }
 
 

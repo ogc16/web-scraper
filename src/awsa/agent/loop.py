@@ -16,8 +16,14 @@
 Every stage is bounded by :class:`~awsa.models.Budget` and by a wall-clock
 deadline, and every stage degrades rather than aborting: a failing search
 provider falls back, a failing LLM falls back to the deterministic extractor,
-an unreadable page is skipped. The loop only stops when coverage is adequate,
-the budget is spent, or the deadline passes — and it always returns a report,
+an unreadable page is skipped.
+
+When the candidate URLs run out but required fields are still uncorroborated,
+the loop re-plans — up to ``Budget.max_replans`` times — telling the planner
+what is missing and which queries it already tried. Re-planning only happens on
+exhaustion, never speculatively, so a well-covered run costs no extra calls.
+The loop stops when coverage is adequate, the budget is spent, the re-plan
+ceiling is reached, or the deadline passes — and it always returns a report,
 including when everything failed.
 """
 
@@ -119,6 +125,9 @@ class AutonomousScraperAgent:
         self.registry = registry or Registry(self.config)
         self._closed = False
         self._challenge_reported: set[str] = set()
+        # Set when the run ended because the re-plan ceiling was hit, so
+        # `stopped_because` can say that instead of blaming a missing URL.
+        self._replan_stop = False
         self._fetcher = fetcher
         self._owns_fetcher = fetcher is None
         self.trace = Trace()
@@ -192,11 +201,51 @@ class AutonomousScraperAgent:
 
         try:
             async with fetcher:
-                pending = await self._plan(spec, llm, queries, usage, budget)
-                if not pending:
-                    self._note("no candidate URLs were found; nothing to fetch")
+                pending: list[SearchHit] = []
+                replans = 0
+                first_pass = True
 
-                while pending:
+                while True:
+                    if not pending:
+                        reason = self._check_budget(usage, budget)
+                        if reason:
+                            self._note(f"stopping: {reason}")
+                            break
+                        # Candidates exhausted. Only now is a re-plan worth its
+                        # cost: the previous round's URLs are all read, so new
+                        # queries are aimed at whatever is still missing.
+                        uncovered = self._uncovered(spec, candidates)
+                        if not stop_on_coverage or not uncovered:
+                            break
+                        # The opening plan is not a re-plan, so it is not charged
+                        # against the re-plan ceiling.
+                        if replans >= budget.max_replans and not first_pass:
+                            self._replan_stop = True
+                            self._note(
+                                f"re-plan limit reached ({budget.max_replans}); "
+                                f"still missing {', '.join(uncovered)}"
+                            )
+                            break
+                        fresh = await self._plan(
+                            spec, llm, queries, usage, budget, uncovered=uncovered
+                        )
+                        if not first_pass:
+                            # Only re-plans are charged against the ceiling; the
+                            # opening plan is not a re-plan.
+                            replans += 1
+                        # Never re-fetch: a re-plan must surface genuinely new
+                        # URLs, or it is just spending the search budget for nothing.
+                        fresh = [h for h in fresh if h.url not in seen_urls]
+                        if not fresh:
+                            self._note(
+                                "no candidate URLs were found; nothing to fetch"
+                                if first_pass
+                                else "re-planning produced no URLs worth fetching"
+                            )
+                            break
+                        pending = fresh
+                        first_pass = False
+
                     reason = self._check_budget(usage, budget)
                     if reason:
                         self._note(f"stopping: {reason}")
@@ -204,7 +253,11 @@ class AutonomousScraperAgent:
 
                     hit = self._next_hit(pending, spec, seen_urls, per_domain)
                     if hit is None:
-                        break
+                        # Every candidate in this pass is used up (already seen, or
+                        # over the per-domain cap). Go back and decide whether to
+                        # re-plan.
+                        pending = []
+                        continue
                     seen_urls.add(hit.url)
 
                     page = await self._fetch_one(fetcher, hit, usage, spec)
@@ -258,6 +311,13 @@ class AutonomousScraperAgent:
     def _stop_reason(
         self, usage: Usage, budget: Budget, report: ResearchReport, stop_on_coverage: bool
     ) -> str:
+        # Checked first: hitting the re-plan ceiling is the real reason the run
+        # ended, even when a field ended up with one value. `unresolved_fields`
+        # only lists fields with no value at all, which is a weaker condition
+        # than the multi-domain coverage the loop actually targets.
+        if self._replan_stop:
+            missing = self._uncovered(self.spec, ())
+            return f"re-plan limit reached; still missing {', '.join(missing)}"
         if stop_on_coverage and not report.unresolved_fields:
             return "all fields covered"
         return self._check_budget(usage, budget) or "ran out of candidate URLs"
@@ -271,12 +331,21 @@ class AutonomousScraperAgent:
         seen_queries: list[str],
         usage: Usage,
         budget: Budget,
+        *,
+        uncovered: tuple[str, ...] = (),
     ) -> list[SearchHit]:
+        """Ask the LLM for queries, then run them through the search stack.
+
+        ``uncovered`` names the required fields still missing. On a re-plan the
+        planner is told what it already tried and what is still missing, so it
+        aims at the gap instead of re-issuing the first round's queries.
+        """
         request = PlanRequest(
             subject=spec.subject,
             fields=spec.field_names,
             field_hints=spec.field_hints,
             existing_queries=tuple(seen_queries),
+            uncovered_fields=uncovered,
             max_queries=max(1, min(budget.max_search_queries, 6)),
             language=spec.language,
         )
@@ -286,9 +355,17 @@ class AutonomousScraperAgent:
             if not queries:
                 self._note("query planner returned nothing")
                 return []
-            seen_queries.extend(queries)
-            self.trace.spans[-1].detail["queries"] = len(queries)
-        return await self._search_all(spec, list(queries), usage, budget)
+            # Keep the run's query list free of repeats so the report shows the
+            # distinct questions asked, not the same question asked twice.
+            fresh = [q for q in queries if q.lower() not in {s.lower() for s in seen_queries}]
+            if not fresh:
+                self._note("query planner repeated queries already tried")
+                return []
+            seen_queries.extend(fresh)
+            self.trace.spans[-1].detail["queries"] = len(fresh)
+            if uncovered:
+                self.trace.spans[-1].detail["replan_for"] = ",".join(uncovered)
+        return await self._search_all(spec, list(fresh), usage, budget)
 
     async def _call_llm(
         self, stack: LLMStack, method: str, request: PlanRequest | ExtractRequest
@@ -523,17 +600,28 @@ class AutonomousScraperAgent:
 
     def _covered(self, spec: ResearchSpec, candidates: Sequence[FieldCandidate]) -> bool:
         """True when every required field has at least one candidate from 2+ domains."""
+        return not self._uncovered(spec, candidates)
+
+    @staticmethod
+    def _uncovered(spec: ResearchSpec, candidates: Sequence[FieldCandidate]) -> tuple[str, ...]:
+        """Required fields still short of ``min_independent_sources`` distinct domains.
+
+        This is the single definition of "missing" in the loop: coverage and
+        re-planning both read it, so they can never disagree about what the run
+        still needs. Optional fields are excluded on purpose, since nothing is
+        owed for them.
+        """
         seen: dict[str, set[str]] = {}
         for candidate in candidates:
             host = spec.domain_of(candidate.evidence.source_url)
             if host:
                 seen.setdefault(candidate.field, set()).add(host)
-        for field_spec in spec.fields:
-            if not field_spec.required:
-                continue
-            if len(seen.get(field_spec.name, ())) < spec.min_independent_sources:
-                return False
-        return True
+        return tuple(
+            field_spec.name
+            for field_spec in spec.fields
+            if field_spec.required
+            and len(seen.get(field_spec.name, ())) < spec.min_independent_sources
+        )
 
 
 def _extractor_name(item: object, provider_name: str = "") -> str:

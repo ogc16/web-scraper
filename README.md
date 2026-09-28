@@ -208,6 +208,13 @@ The loop keeps fetching while required fields lack corroboration and stops on
 coverage, budget, or the wall clock — **whichever comes first**. It always
 returns a report, including a report with nothing in it.
 
+When a round's candidate URLs run out but a required field is still short of
+`--min-sources` independent domains, the loop **re-plans**: it tells the planner
+which fields are missing and which queries it already tried, so the next round
+aims at the gap. This costs nothing on a well-covered run, because re-planning
+only happens on exhaustion. `--max-replans` caps the extra passes (default 2;
+`--budget tiny` sets 0, since a second planner call is not affordable there).
+
 ### Pipeline
 
 ```mermaid
@@ -230,6 +237,7 @@ flowchart LR
     llm -.-> extract
     srch["SearchProvider<br/>duckduckgo / brave / serp"] -.-> search
     ver["reconcile<br/>Wilson lower bound"] -.-> report
+    rp["max_replans<br/>default 2, tiny = 0"] -.-> plan
 
     style report fill:#1f6f43,stroke:#0d3,color:#fff
     style out fill:#1f6f43,stroke:#0d3,color:#fff
@@ -360,7 +368,7 @@ sequenceDiagram
         SR-->>Agent: ranked SearchHits
     end
 
-    loop each pending hit, while required fields lack corroboration
+    loop each pending hit
         Note over Agent: triage: dedupe, domain policy, per-host cap
         Agent->>F: fetch(url)
         F->>F: SSRF, cache, robots, pacing, size cap
@@ -369,6 +377,12 @@ sequenceDiagram
         Agent->>L: extract_fields(text)
         L-->>Agent: values + verbatim quotes
         Note over Agent,L: quotes are re-checked<br/>against the fetched page
+    end
+
+    opt URLs exhausted, required field still short of min-sources
+        Agent->>L: plan_queries(missing fields, queries already tried)
+        L-->>Agent: targeted queries
+        Note over Agent: re-plan, up to max_replans
     end
 
     Agent->>V: reconcile(spec, candidates)

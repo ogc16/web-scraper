@@ -21,6 +21,7 @@ import json
 import os
 import sys
 from collections.abc import Sequence
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Final
 
 if TYPE_CHECKING:
@@ -164,6 +165,16 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["markdown", "json", "plain"],
         help="output format (default: markdown)",
     )
+    research.add_argument(
+        "--max-replans",
+        type=int,
+        default=None,
+        metavar="N",
+        help=(
+            "extra planning passes when fields stay uncorroborated; "
+            "overrides the --budget preset (default: 2, or 0 for tiny)"
+        ),
+    )
     research.add_argument("-o", "--output", default=None, help="write the report to this file")
     research.add_argument(
         "--include-domain",
@@ -266,10 +277,17 @@ async def _cmd_research(args: argparse.Namespace, out: TextIO, err: TextIO) -> i
         fields = list(DEFAULT_FIELDS)
         print(f"note: no --field given, defaulting to {','.join(DEFAULT_FIELDS)}", file=err)
 
+    budget = _budget_from(args.budget)
+    if args.max_replans is not None:
+        if args.max_replans < 0:
+            print("error: --max-replans must be >= 0", file=err)
+            return EXIT_USAGE
+        budget = replace(budget, max_replans=args.max_replans)
+
     spec = ResearchSpec.build(
         args.subject,
         fields,
-        budget=_budget_from(args.budget),
+        budget=budget,
         include_domains=frozenset(args.include_domain or ()),
         exclude_domains=frozenset(args.exclude_domain or ()),
         **(

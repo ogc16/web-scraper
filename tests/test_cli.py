@@ -412,6 +412,46 @@ class TestResearchArgsToSpec:
         assert spec.fields[0].name == "founded"
         assert spec.fields[0].hint == "when founded"
 
+    def test_max_replans_overrides_the_budget_preset(
+        self, capsys: Capture, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        seen: list[ResearchSpec] = []
+
+        def _install(config: object, spec: ResearchSpec) -> _StubAgent:
+            seen.append(spec)
+            return _StubAgent(_empty_report())
+
+        monkeypatch.setattr(cli, "AutonomousScraperAgent", _install)
+        main(["research", "Ada Lovelace", "--budget", "tiny", "--max-replans", "4"])
+        capsys.readouterr()
+        # `tiny` disables re-planning; the explicit flag has to win, or the flag
+        # would be silently ignored for that preset.
+        assert seen[0].budget.max_replans == 4
+
+    def test_max_replans_defaults_to_the_preset(
+        self, capsys: Capture, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        seen: list[ResearchSpec] = []
+
+        def _install(config: object, spec: ResearchSpec) -> _StubAgent:
+            seen.append(spec)
+            return _StubAgent(_empty_report())
+
+        monkeypatch.setattr(cli, "AutonomousScraperAgent", _install)
+        main(["research", "Ada Lovelace", "--budget", "tiny"])
+        capsys.readouterr()
+        assert seen[0].budget.max_replans == 0
+
+    def test_negative_max_replans_is_a_usage_error(
+        self, capsys: Capture, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            cli, "AutonomousScraperAgent", lambda *_a, **_k: pytest.fail("should not run")
+        )
+        code = main(["research", "Ada Lovelace", "--max-replans", "-1"])
+        assert code == cli.EXIT_USAGE
+        assert "max-replans" in capsys.readouterr().err
+
     def test_no_stop_on_coverage_is_forwarded(
         self, capsys: Capture, monkeypatch: pytest.MonkeyPatch
     ) -> None:

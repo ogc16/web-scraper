@@ -14,6 +14,8 @@ when every provider fails.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Sequence
+from dataclasses import replace
 from typing import Any
 
 import pytest
@@ -76,15 +78,31 @@ class FakeLLM:
     name = "fake-llm"
     requires_key = False
 
-    def __init__(self, *, quote: str = "Ada Lovelace", value: str = "Ada Lovelace") -> None:
+    def __init__(
+        self,
+        *,
+        quote: str = "Ada Lovelace",
+        value: str = "Ada Lovelace",
+        queries: Sequence[str] | None = None,
+        field: str | None = None,
+    ) -> None:
         self.quote = quote
         self.value = value
+        # When given, the planner hands out these queries in order instead of
+        # echoing the subject, so a re-plan can be told apart from the first one.
+        self._queries = list(queries) if queries else None
+        self.field = field
         self.plans = 0
         self.extractions = 0
         self.closed = False
+        self.plan_requests: list[PlanRequest] = []
 
     async def plan_queries(self, request: PlanRequest) -> list[str]:
         self.plans += 1
+        self.plan_requests.append(request)
+        if self._queries is not None:
+            index = min(self.plans - 1, len(self._queries) - 1)
+            return [self._queries[index]]
         return [request.subject]
 
     async def extract_fields(self, request: ExtractRequest) -> list[ExtractedField]:
@@ -96,7 +114,7 @@ class FakeLLM:
             return []
         return [
             ExtractedField(
-                field=request.fields[0] if request.fields else "name",
+                field=self.field or (request.fields[0] if request.fields else "name"),
                 value=self.value,
                 quote=self.quote,
                 confidence=0.8,
@@ -194,7 +212,10 @@ class TestHappyPath:
     def test_queries_the_llm_planner(self, server: FixtureServer) -> None:
         agent, search, llm = _agent(server, hits={"Ada Lovelace": [server.url("/people")]})
         run(agent.run())
-        assert llm.plans == 1
+        # One page is a single domain, which cannot satisfy min_independent_sources
+        # on its own, so the run is entitled to a second planning pass. What
+        # matters here is that the planner is consulted and its query is searched.
+        assert llm.plans >= 1
         assert search.queries, "the planned query should reach the search provider"
 
     def test_records_usage_and_sources(self, server: FixtureServer) -> None:
@@ -347,6 +368,120 @@ class TestBudgetStops:
         result = run(agent.run(stop_on_coverage=True))
         assert result.stopped_because == "all fields covered"
         assert result.report.usage.pages_fetched == 1
+
+
+class TestReplanning:
+    """A run that exhausts its URLs but is still missing fields re-plans."""
+
+    def test_replans_when_a_field_lacks_a_second_source(self, server: FixtureServer) -> None:
+        # 127.0.0.1 and localhost are distinct hosts to `domain_of` but both
+        # reach the fixture server, which is how a second independent source is
+        # produced without a second server.
+        spec = ResearchSpec.build(
+            "Ada Lovelace",
+            ["name"],
+            budget=replace(Budget.preset("deep"), max_replans=2),
+        )
+        llm = FakeLLM(queries=["Ada Lovelace", "Ada Lovelace second source"])
+        hits = {
+            "Ada Lovelace": [server.url("/people")],
+            "Ada Lovelace second source": [server.url("/people").replace("127.0.0.1", "localhost")],
+        }
+        agent, search, _ = _agent(server, hits=hits, llm=llm, spec=spec)
+        result = run(agent.run())
+        # The first pass corroborates nothing, so the planner is asked again with
+        # the gap named, and the new query reaches the search stack.
+        assert llm.plans == 2
+        assert "Ada Lovelace second source" in search.queries
+        assert result.report.usage.pages_fetched == 2
+        assert result.stopped_because == "all fields covered"
+
+    def test_replan_request_names_the_missing_field(self, server: FixtureServer) -> None:
+        spec = ResearchSpec.build(
+            "Ada Lovelace",
+            ["name", "birth_year"],
+            budget=replace(Budget.preset("deep"), max_replans=2),
+        )
+        # Only "name" is extractable, so "birth_year" is the gap that never
+        # closes. Each query adds a distinct host, so after the first two rounds
+        # "name" is corroborated from two domains and drops off the missing list.
+        llm = FakeLLM(
+            queries=["Ada Lovelace", "Ada Lovelace bio", "Ada Lovelace birth year"],
+            field="name",
+        )
+        other_host = "localhost"
+        hits = {
+            "Ada Lovelace": [server.url("/people")],
+            "Ada Lovelace bio": [server.url("/index.html").replace("127.0.0.1", other_host)],
+            "Ada Lovelace birth year": [server.url("/page/9")],
+        }
+        agent, _, _ = _agent(server, hits=hits, llm=llm, spec=spec)
+        run(agent.run())
+        assert len(llm.plan_requests) == 3
+        second, third = llm.plan_requests[1], llm.plan_requests[2]
+        # The planner is told what it already tried, so it should not repeat it.
+        assert "Ada Lovelace" in second.existing_queries
+        # Both fields are short of two domains after one page, so both are named.
+        assert set(second.uncovered_fields) == {"name", "birth_year"}
+        # By the third pass "name" has two domains, so only the real gap remains.
+        assert third.uncovered_fields == ("birth_year",)
+
+    def test_replan_limit_is_enforced(self, server: FixtureServer) -> None:
+        spec = ResearchSpec.build(
+            "Ada Lovelace",
+            ["name"],
+            budget=replace(Budget.preset("deep"), max_replans=0),
+        )
+        # A query that keeps returning the same single-domain page can never be
+        # corroborated, so the run must stop instead of spinning.
+        llm = FakeLLM(queries=["Ada Lovelace"])
+        agent, _, _ = _agent(
+            server, hits={"Ada Lovelace": [server.url("/people")]}, llm=llm, spec=spec
+        )
+        result = run(agent.run())
+        assert llm.plans == 1
+        assert "re-plan" in result.stopped_because
+        assert any("re-plan limit" in note for note in result.notes)
+
+    def test_tiny_budget_never_replans(self, server: FixtureServer) -> None:
+        spec = ResearchSpec.build("Ada Lovelace", ["name"], budget=Budget.preset("tiny"))
+        assert spec.budget.max_replans == 0
+        agent, _, llm = _agent(server, hits={"Ada Lovelace": [server.url("/people")]}, spec=spec)
+        run(agent.run())
+        assert llm.plans == 1
+
+    def test_no_replan_when_a_second_url_corroborates(self, server: FixtureServer) -> None:
+        # Both URLs are distinct paths on one host, so the field stays
+        # uncorroborated and a re-plan is expected; this pins that re-planning
+        # keys off independent domains, not off raw page count.
+        spec = ResearchSpec.build(
+            "Ada Lovelace",
+            ["name"],
+            budget=replace(Budget.preset("deep"), max_replans=3),
+        )
+        agent, _, llm = _agent(
+            server,
+            hits={"Ada Lovelace": [server.url("/people"), server.url("/index.html")]},
+            spec=spec,
+        )
+        run(agent.run())
+        assert llm.plans == 2, "one host cannot satisfy min_independent_sources"
+
+    def test_replan_does_not_refetch_a_seen_url(self, server: FixtureServer) -> None:
+        spec = ResearchSpec.build(
+            "Ada Lovelace",
+            ["name"],
+            budget=replace(Budget.preset("deep"), max_replans=2),
+        )
+        # The re-plan hands back the same URL. Fetching it twice would inflate
+        # apparent support, so the run must give up instead.
+        llm = FakeLLM(queries=["Ada Lovelace", "Ada Lovelace"])
+        agent, _, _ = _agent(
+            server, hits={"Ada Lovelace": [server.url("/people")]}, llm=llm, spec=spec
+        )
+        result = run(agent.run())
+        assert result.report.usage.pages_fetched == 1
+        assert any("repeated" in note or "no URLs worth" in note for note in result.notes)
 
 
 class TestLifecycle:

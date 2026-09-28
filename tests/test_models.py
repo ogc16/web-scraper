@@ -50,6 +50,18 @@ class TestBudget:
         with pytest.raises(ValueError, match="unknown budget preset"):
             Budget.preset("enormous")
 
+    def test_tiny_preset_disables_replanning(self) -> None:
+        # A tiny budget cannot pay for a second planner call, so re-planning
+        # would silently break the ceiling it is supposed to respect.
+        assert Budget.preset("tiny").max_replans == 0
+
+    def test_replan_ceiling_is_validated(self) -> None:
+        with pytest.raises(ValueError, match="max_replans must be >= 0"):
+            Budget(max_replans=-1)
+
+    def test_replans_round_trip_through_as_dict(self) -> None:
+        assert Budget(max_replans=5).as_dict()["max_replans"] == 5
+
     def test_is_frozen(self) -> None:
         with pytest.raises(FrozenInstanceError):
             Budget().max_pages = 99  # type: ignore[misc]
