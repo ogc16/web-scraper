@@ -1,14 +1,18 @@
 # Credits and provenance
 
 This repository is the successor to two earlier projects by the same author.
-Both were preserved as git remotes (`legacy-agent`, `legacy-scraper`) so the
-history is traceable; their code is **not** carried forward, because neither
-could run.
+Their code is **not** carried forward, because neither could run.
 
-| Upstream | Remote | What it was |
-| --- | --- | --- |
-| `ogc16/web-scraping-agent-demo` | `legacy-agent` | OpenAI Agents SDK driving Bright Data's MCP server |
-| `ogc16/web-scraper` | `legacy-scraper` | A ten-line `requests` script |
+| Upstream | What it was |
+| --- | --- |
+| `ogc16/web-scraping-agent-demo` (`legacy-agent`) | OpenAI Agents SDK driving Bright Data's MCP server |
+| `ogc16/web-scraper` (`legacy-scraper`) | A ten-line `requests` script |
+
+Note on remotes: `awsa` now lives **in** `ogc16/web-scraper`, the repository that
+previously held the ten-line script. `legacy-scraper` is therefore the ancestor of
+the current `main` rather than a separate upstream, and the rewrite sits on top
+of it as ordinary commits. `legacy-agent` has unrelated history and remains a
+read-only reference.
 
 ## Why they were replaced rather than merged
 

@@ -91,8 +91,8 @@ before.
 ## Install
 
 ```console
-git clone https://github.com/ogc16/autonomous-web-scraper-agent
-cd autonomous-web-scraper-agent
+git clone https://github.com/ogc16/web-scraper
+cd web-scraper
 pip install -e .
 awsa doctor
 ```
@@ -551,6 +551,30 @@ The test suite starts a local fixture web server, so `make test` is hermetic
 and deterministic. Network-dependent behaviour is tested against a real socket
 loopback, not mocks, which is why the robots, redirect, retry and size-cap
 paths are genuinely exercised.
+
+Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for the
+conventions CI enforces, and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) for the
+ground rules.
+
+---
+
+## Support and security
+
+- **Support** — [SUPPORT.md](SUPPORT.md). There is no SLA and there cannot be:
+  this is a library you run yourself, not a hosted service. That page also lists
+  the known limitations so they are not mistaken for bugs.
+- **SLA template** — [SLA.md](SLA.md) is an unfilled template for a *hosted*
+  offering. It is not in force, and the placeholders are deliberate. See §2 for
+  why the self-hosted case has no availability figure at all.
+- **Security** — [SECURITY.md](SECURITY.md) for the private reporting channel,
+  the threat model in one page, and what is deliberately *not* defended.
+- **Releases** — [releases](https://github.com/ogc16/web-scraper/releases). Each
+  release attaches the built wheel and sdist, so you can install without
+  building:
+
+  ```console
+  pip install https://github.com/ogc16/web-scraper/releases/download/v0.1.0/awsa-0.1.0-py3-none-any.whl
+  ```
 
 ---
 

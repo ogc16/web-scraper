@@ -9,6 +9,7 @@ loopback fixture server instead of the public internet.
 from __future__ import annotations
 
 import json
+import tomllib
 from collections.abc import Callable
 from pathlib import Path
 
@@ -135,6 +136,16 @@ class TestExitCodes:
     def test_version(self, capsys: Capture) -> None:
         assert main(["--version"]) == EXIT_OK
         assert __version__ in capsys.readouterr().out
+
+    def test_version_matches_the_packaging_metadata(self) -> None:
+        # The version is written in two files rather than derived from one, so a
+        # bump that misses either produces a wheel whose metadata disagrees with
+        # `awsa --version` and with the release tag. Read the real file rather
+        # than a fixture, or the check would not notice the drift.
+        pyproject = Path(__file__).resolve().parent.parent / "pyproject.toml"
+        assert pyproject.is_file()
+        declared = tomllib.loads(pyproject.read_text(encoding="utf-8"))["project"]["version"]
+        assert declared == __version__
 
     def test_help_exits_zero(self, capsys: Capture) -> None:
         assert main(["--help"]) == EXIT_OK
