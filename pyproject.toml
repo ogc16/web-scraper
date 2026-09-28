@@ -1,0 +1,146 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "awsa"
+version = "0.1.0"
+description = "Autonomous, evidence-grounded web research agent with pluggable, no-lock-in providers."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+authors = [{ name = "awsa contributors" }]
+keywords = ["scraping", "agent", "llm", "research", "provenance", "robots"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Internet :: WWW/HTTP :: Indexing/Search",
+  "Typing :: Typed",
+]
+dependencies = [
+  "httpx>=0.27",
+  "platformdirs>=4.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "build>=1.2",
+  "mypy>=1.11",
+  "pytest>=8.0",
+  "pytest-asyncio>=0.24",
+  "ruff>=0.6",
+]
+
+[project.scripts]
+awsa = "awsa.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/ogc16/autonomous-web-scraper-agent"
+Issues = "https://github.com/ogc16/autonomous-web-scraper-agent/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/awsa"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = "-q --strict-markers"
+filterwarnings = ["error"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+  "E", "W",    # pycodestyle
+  "F",         # pyflakes
+  "I",         # isort
+  "UP",        # pyupgrade
+  "B",         # bugbear
+  "C4",        # comprehensions
+  "SIM",       # simplify
+  "RET",       # return
+  "ARG",       # unused args
+  "PTH",       # pathlib
+  "TID",       # tidy imports
+  "RUF",
+  "S",         # bandit
+  "ANN",       # annotations
+  "ASYNC",
+  "D",         # pydocstyle
+]
+ignore = [
+  "D203",  # incompatible with D211
+  "D213",  # incompatible with D212
+  # Docstring rules that fight the data model rather than documenting intent.
+  # Methods, dunders and __init__ are covered by the class docstring and by
+  # per-field comments on the frozen config dataclasses.
+  "D102",
+  "D105",
+  "D107",
+  "TID252",  # sibling *and* parent-relative imports are the house style
+  # `Any` is used deliberately in two places that a stricter annotation cannot
+  # express: `**kwargs` forwarded into frozen dataclass constructors, and
+  # `**detail` structured-logging fields. Return types stay concrete, and mypy
+  # runs strict over both src and tests.
+  "ANN401",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests trade parameter/return annotations for readability, matching the
+# `disallow_untyped_defs = false` override in [tool.mypy] below. Annotating the
+# pytest fixture factories would mean a Callable type per fixture, which adds
+# noise without catching real defects. Bodies are still fully type-checked.
+"tests/*" = [
+  "D100", "D101", "D102", "D103", "D104",
+  "S101",    # assert is the point of a test
+  "ANN001",  # see note above
+  "ANN201",
+  "ANN202",
+  "ANN401",
+  "ARG001", "ARG002", "ARG005",
+  "SLF001",  # tests legitimately reach into private helpers
+]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.pylint]
+max-args = 8
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_unreachable = true
+disallow_any_generics = true
+files = ["src/awsa", "tests"]
+plugins = []
+
+[[tool.mypy.overrides]]
+# `tests/` has no __init__.py, so mypy sees these as top-level modules named
+# `test_foo`, not `tests.test_foo`. A `tests.*` pattern alone silently matches
+# nothing, and mypy rejects a bare `test_*`, so the modules are listed. Add a
+# line here when a new test file is added.
+module = [
+  "conftest",
+    "test_cache",
+    "test_cli",
+    "test_client",
+    "test_config",
+    "test_extract",
+    "test_guard",
+    "test_http",
+    "test_loop",
+    "test_models",
+  "test_providers",
+  "test_report",
+  "test_robots",
+  "test_verifier",
+]
+disallow_untyped_defs = false
