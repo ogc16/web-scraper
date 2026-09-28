@@ -7,6 +7,8 @@ it on your behalf, so there is no service whose uptime could be measured or
 promised, and no party standing behind a response time. If you need a contractual
 availability commitment, `awsa` is the wrong dependency for that requirement.
 
+[SLA.md](SLA.md) is the formal statement of that position.
+
 What that means in practice:
 
 - You run the code. Its availability is your infrastructure's availability.

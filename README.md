@@ -563,9 +563,9 @@ ground rules.
 - **Support** — [SUPPORT.md](SUPPORT.md). There is no SLA and there cannot be:
   this is a library you run yourself, not a hosted service. That page also lists
   the known limitations so they are not mistaken for bugs.
-- **SLA template** — [SLA.md](SLA.md) is an unfilled template for a *hosted*
-  offering. It is not in force, and the placeholders are deliberate. See §2 for
-  why the self-hosted case has no availability figure at all.
+- **SLA** — [SLA.md](SLA.md) records that no service level is offered, and
+  explains why there is no availability figure to report. There is no hosted
+  service to hold to one.
 - **Security** — [SECURITY.md](SECURITY.md) for the private reporting channel,
   the threat model in one page, and what is deliberately *not* defended.
 - **Releases** — [releases](https://github.com/ogc16/web-scraper/releases). Each
