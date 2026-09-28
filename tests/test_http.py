@@ -11,6 +11,7 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import replace
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import pytest
 
@@ -129,12 +130,25 @@ class TestSafety:
             with pytest.raises(UnsafeURLError):
                 await f.fetch(server.url("/people"))
 
-    async def test_redirect_to_metadata_endpoint_is_blocked(
-        self, fetcher: FetcherFactory, server: FixtureServer
+    async def test_redirect_to_a_host_outside_the_allowlist_is_blocked(
+        self, config: Config, server: FixtureServer
     ) -> None:
-        async with await fetcher() as f:
-            with pytest.raises((UnsafeURLError, FetchError)):
+        # The suite runs with allow_private_hosts=True so it can reach the
+        # loopback fixture server, which means the address check is off and a
+        # redirect to 169.254.169.254 is *permitted* by policy here. Pinning
+        # the allowlist to the fixture host is what makes the hop fail, and it
+        # fails before DNS or a socket: the property under test is that every
+        # redirect target is re-validated, not whether the ambient network
+        # happens to answer at the metadata address. That check would otherwise
+        # pass on a laptop and fail on a CI runner with a reachable IMDS.
+        loopback = urlsplit(server.base).hostname or "127.0.0.1"
+        pinned = replace(
+            config, network=replace(config.network, host_allowlist=frozenset({loopback}))
+        )
+        async with HttpFetcher(pinned) as f:
+            with pytest.raises(UnsafeURLError) as excinfo:
                 await f.fetch(server.url("/redirect-external"))
+        assert "allowlist" in str(excinfo.value)
 
     async def test_redirect_limit_is_enforced(
         self, fetcher: FetcherFactory, server: FixtureServer
