@@ -154,7 +154,8 @@ llm providers (in fallback order):
 ### Exit codes
 
 `0` found something · `1` ran cleanly but found nothing · `2` bad usage or config ·
-`3` blocked by robots.txt or the SSRF guard · `4` every provider failed.
+`3` blocked by policy (robots.txt, the SSRF guard, or `--no-network`) ·
+`4` every provider failed.
 
 ---
 
@@ -191,7 +192,7 @@ environment, so use `python-dotenv run` or export the variables.
 ```
 spec ──▶ plan ──▶ search ──▶ triage ──▶ fetch ──▶ reduce ──▶ extract ──▶ reconcile ──▶ report
         LLM       provider    domain     polite    main       LLM/        Wilson
-                             policy     cached    content    structured   bounds
+                              policy     cached    content    structured   bounds
 ```
 
 1. **Plan** — turn a subject and a list of fields into search queries.
@@ -203,9 +204,234 @@ spec ──▶ plan ──▶ search ──▶ triage ──▶ fetch ──▶ 
 7. **Reconcile** — group values across pages, weight independent domains over repeated pages, keep conflicts visible.
 8. **Report** — Markdown, JSON or `field: value`, with confidence buckets.
 
-The loop re-plans while required fields lack corroboration and stops on
+The loop keeps fetching while required fields lack corroboration and stops on
 coverage, budget, or the wall clock — **whichever comes first**. It always
 returns a report, including a report with nothing in it.
+
+### Pipeline
+
+```mermaid
+flowchart LR
+    spec[ResearchSpec<br/>subject + fields] --> plan[plan]
+    plan -->|queries| search[search]
+    search -->|SearchHit| triage[triage]
+    triage -->|URL worth fetching| gate{"budget or<br/>wall clock<br/>exhausted?"}
+    triage -.->|no candidates left| report
+    gate -- yes --> report
+    gate -- no --> fetch[fetch]
+    fetch --> reduce[reduce]
+    reduce --> extract[extract]
+    extract -->|FieldCandidate| cov{"required fields<br/>corroborated?"}
+    cov -- yes --> report
+    cov -- no --> triage
+    report -->|always returns| out["a report, even<br/>if it is empty"]
+
+    llm["LLMProvider<br/>plan_queries / extract_fields"] -.-> plan
+    llm -.-> extract
+    srch["SearchProvider<br/>duckduckgo / brave / serp"] -.-> search
+    ver["reconcile<br/>Wilson lower bound"] -.-> report
+
+    style report fill:#1f6f43,stroke:#0d3,color:#fff
+    style out fill:#1f6f43,stroke:#0d3,color:#fff
+    style gate fill:#8a5a00,stroke:#c90,color:#fff
+    style cov fill:#8a5a00,stroke:#c90,color:#fff
+```
+
+### Fetch safety gate
+
+Every hop — the first request and each redirect — passes the same gates. A
+failure at any of them is a skipped page, not a failed run.
+
+```mermaid
+flowchart TD
+    url[URL] --> net{"--no-network<br/>and no fresh<br/>cache entry?"}
+    net -- yes --> block1[NetworkBlocked]
+    net -- no --> ssrc{SSRF guard:<br/>scheme and<br/>credentials?}
+    ssrc -- no --> block2[UnsafeURLError]
+    ssrc -- yes --> fresh{"fresh cache<br/>entry?"}
+    fresh -- yes --> hit[return from cache]
+    fresh -- no --> robots{robots.txt<br/>allows us?}
+    robots -- no --> block3[RobotsDenied]
+    robots -- yes --> dial["request with backoff<br/>re-resolve DNS, drop<br/>private answers"]
+    dial --> redirect{redirect?}
+    redirect -- yes --> ssrc
+    redirect -- no --> cap{within byte cap?}
+    cap -- no --> block4[FetchError]
+    cap -- yes --> ok[FetchResult]
+
+    style block1 fill:#7a1f1f,stroke:#d33,color:#fff
+    style block2 fill:#7a1f1f,stroke:#d33,color:#fff
+    style block3 fill:#7a1f1f,stroke:#d33,color:#fff
+    style block4 fill:#7a1f1f,stroke:#d33,color:#fff
+    style ok fill:#1f6f43,stroke:#0d3,color:#fff
+    style hit fill:#1f6f43,stroke:#0d3,color:#fff
+```
+
+### Provider seams
+
+The agent depends on three Protocols, never on a concrete vendor. `Registry`
+resolves each one from config and hands back an ordered stack, so a missing or
+broken key degrades to the next candidate instead of aborting the run.
+
+```mermaid
+classDiagram
+    class SearchProvider {
+        <<Protocol>>
+        +name: str
+        +requires_key: bool
+        +search(query, limit) Sequence~SearchHit~
+    }
+    class PageProvider {
+        <<Protocol>>
+        +name: str
+        +requires_key: bool
+        +get_text(url) str
+    }
+    class LLMProvider {
+        <<Protocol>>
+        +name: str
+        +requires_key: bool
+        +plan_queries(PlanRequest) Sequence~str~
+        +extract_fields(ExtractRequest) Sequence~ExtractedField~
+        +usage() LLMUsage
+    }
+
+    class Registry {
+        +search_stack(name) SearchStack
+        +llm_stack(name) LLMStack
+        +unlocker() BrightDataUnlocker
+        +describe() dict
+        +aclose() None
+    }
+
+    class SearchStack {
+        +primary: SearchProvider
+        +fallbacks: tuple
+        +candidates() Iterator~SearchProvider~
+    }
+    class LLMStack {
+        +candidates() Iterator~LLMProvider~
+    }
+
+    class DuckDuckGoSearch
+    class BraveSearch
+    class BrightDataSerp
+    class ExtractiveLLM
+    class OpenAICompatLLM
+    class BrightDataUnlocker
+
+    SearchProvider <|.. DuckDuckGoSearch
+    SearchProvider <|.. BraveSearch
+    SearchProvider <|.. BrightDataSerp
+    LLMProvider <|.. ExtractiveLLM
+    LLMProvider <|.. OpenAICompatLLM
+    PageProvider <|.. BrightDataUnlocker
+
+    Registry ..> SearchStack : builds
+    Registry ..> LLMStack : builds
+    Registry ..> SearchProvider : resolves
+    Registry ..> LLMProvider : resolves
+    Registry ..> PageProvider : resolves
+```
+
+### One run, end to end
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User
+    participant CLI as awsa CLI
+    participant Reg as Registry
+    participant Agent as AutonomousScraperAgent
+    participant SR as SearchProvider
+    participant F as HttpFetcher
+    participant L as LLMProvider
+    participant V as reconcile
+
+    User->>CLI: awsa research "Ada Lovelace" -f name
+    CLI->>Reg: search_stack() / llm_stack()
+    Reg-->>CLI: keyless stacks + resolution notes
+    CLI->>Agent: run()
+    Agent->>L: plan_queries(fields)
+    L-->>Agent: ["Ada Lovelace name", ...]
+
+    loop each planned query, until one returns hits
+        Agent->>SR: search(query)
+        SR-->>Agent: ranked SearchHits
+    end
+
+    loop each pending hit, while required fields lack corroboration
+        Note over Agent: triage: dedupe, domain policy, per-host cap
+        Agent->>F: fetch(url)
+        F->>F: SSRF, cache, robots, pacing, size cap
+        F-->>Agent: FetchResult
+        Agent->>Agent: reduce to main text
+        Agent->>L: extract_fields(text)
+        L-->>Agent: values + verbatim quotes
+        Note over Agent,L: quotes are re-checked<br/>against the fetched page
+    end
+
+    Agent->>V: reconcile(spec, candidates)
+    V-->>Agent: claims + unresolved fields
+    Agent-->>CLI: AgentResult
+    CLI-->>User: report + exit code
+```
+
+### Evidence model
+
+Why a value is believed, and what would count against it.
+
+```mermaid
+classDiagram
+    class Evidence {
+        +source_url: str
+        +quote: str
+        +source_title: str
+        +char_start: int
+        +char_end: int
+    }
+    class FieldCandidate {
+        +field: str
+        +value: str
+        +confidence: float
+        +extractor: str
+        +evidence: Evidence
+    }
+    class Conflict {
+        +value: str
+        +support: int
+        +sources: tuple
+    }
+    class Claim {
+        +field: str
+        +value: str
+        +confidence: float
+        +support: int
+        +independent_domains: tuple
+        +evidence: tuple~Evidence~
+        +conflicts: tuple~Conflict~
+        +corroborated: bool
+        +label: Confidence
+    }
+    class ResearchReport {
+        +subject: str
+        +claims: tuple~Claim~
+        +sources: tuple~Source~
+        +usage: Usage
+        +budget: Budget
+        +unresolved_fields: tuple~str~
+    }
+
+    Evidence --> FieldCandidate : proves
+    FieldCandidate --> Claim : grouped into
+    Conflict --> Claim : retained on
+    Claim --> ResearchReport : reported in
+```
+
+Note what is *not* modelled: a path from `FieldCandidate` to `Claim` exists
+only when its quote appears verbatim in the source text. A candidate whose quote
+cannot be located is dropped before grouping, so an unquotable value cannot
+reach the report.
 
 ### Confidence, specifically
 
