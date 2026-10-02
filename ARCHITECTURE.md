@@ -138,7 +138,7 @@ so, with the notes explaining why.
 | Threat | Control | Where |
 | --- | --- | --- |
 | SSRF to internal services | scheme allowlist, credential rejection, DNS resolution + public-IP check on every request **and redirect hop** | `net/guard.py` |
-| DNS rebinding | host resolved and validated before the request; the answer is re-resolved with the cache bypassed immediately before the socket opens and must be a subset of the approved set, on every hop | `net/guard.py`, `net/http.py` |
+| DNS rebinding | host resolved and validated before the request; the answer is re-resolved with the cache bypassed immediately before the socket opens, must be a subset of the approved set, and is then **the address dialled** — the client never resolves the name for itself. Unapproved hosts are refused, not resolved | `net/guard.py`, `net/http.py`, `net/pinning.py` |
 | Prompt injection via page text | page text fenced in a delimited block, declared untrusted, model instructed never to obey it; output schema validated and every quote re-checked against the source | `providers/llm_openai.py` |
 | Hallucinated values | quotes must appear verbatim in the page or the value is dropped | `providers/llm_openai.py` |
 | Unbounded spend | six budgets plus the re-plan ceiling, checked before every stage | `agent/loop.py` |
@@ -148,22 +148,46 @@ so, with the notes explaining why.
 | Decompression bomb / huge page | `max_page_bytes` enforced from `Content-Length` *and* mid-stream | `net/http.py` |
 | Malformed HTML | parser is lenient by construction; catches its own failures | `extract/html.py` |
 
-### Known limitation: rebinding window
+### Rebinding: closed at the socket, with one caveat
 
-`SSRFGuard.recheck` narrows the DNS-rebinding window to the gap between its
-lookup and the client's own, but it does not eliminate it. httpx resolves the
-hostname itself, so a determined attacker controlling the authoritative DNS
-record could in principle still win that last race. Closing it fully requires
-connecting to a pre-validated IP while preserving the `Host` header and TLS SNI,
-which is not expressible through httpx's public transport API. IP literals are
-exempt from the re-check because they cannot be rebound.
+The rebinding window used to be the gap between `SSRFGuard.recheck`'s lookup and
+httpx's own resolution of the same name. It is now closed: the validated address
+is what gets dialled.
+
+`PinnedNetworkBackend` sits in httpcore's network layer, so httpcore still sees
+the hostname — keeping the `Host` header and TLS SNI correct — while the connector
+receives an address from `ApprovedHosts` instead of a name. A host absent from
+that map is refused outright rather than resolved, so an unvetted name cannot
+reach DNS at all. The naive alternative, rewriting the URL to an IP literal,
+would have broken SNI and virtual hosting.
+
+Two consequences worth stating plainly:
+
+- **A proxy disables pinning.** The proxy resolves the name, not this process, so
+  pinning would only pin the proxy's own address. `PinningTransport` detects this,
+  logs a warning, and leaves httpx's pool untouched — it does not pretend to a
+  guarantee it cannot keep.
+- **The pool is rebuilt.** httpx does not expose httpcore's `network_backend`
+  parameter, so `PinningTransport` reconstructs the pool to install one.
+  `_assert_pool_contract` verifies the pool signature still matches at
+  construction, turning a silent loss of pinning under an httpcore upgrade into a
+  loud failure. `httpcore` is pinned to `>=1.0.9,<2` for the same reason.
+
+IP literals are exempt from the re-check because they cannot be rebound, and are
+pinned to themselves.
 
 ## Test strategy
 
-No mocking framework. `tests/conftest.py` starts a real `http.server` on
-loopback and the SSRF guard is opened to private hosts only for those tests.
-Real sockets mean redirects, `Retry-After`, robots parsing and size caps are
-exercised for real.
+No mocking framework for the fetching layer. `tests/conftest.py` starts a real
+`http.server` on loopback and the SSRF guard is opened to private hosts only for
+those tests. Real sockets mean redirects, `Retry-After`, robots parsing and size
+caps are exercised for real.
+
+The one exception is `respx`, used **only** for provider responses in
+`tests/test_providers.py`. Standing up a server that speaks an OpenAI-compatible
+chat API to assert "a model returning `{"value": null}` must not yield the string
+`"None"`" would test the fixture rather than the behaviour. Nothing in the suite
+reaches an external endpoint either way.
 
 The offline stack is not a stub — `ExtractiveLLM` is the default provider in CI
 and under `--offline`, so every layer is covered without an API key.

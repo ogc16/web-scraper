@@ -53,11 +53,13 @@ These are properties of the design, listed so they are not mistaken for bugs.
   and bot-challenges unidentified clients. When that happens `awsa` says so
   explicitly and points at the fix rather than reporting zero results. Set
   `AWSA_BRAVE_API_KEY` for unattended use.
-- **DNS rebinding is mitigated, not eliminated.** The SSRF guard re-resolves a
-  hostname and discards private answers *immediately before* a socket is
-  opened, but `httpx` performs its own resolution when it dials. The window
-  between the check and the connect is not closed by a true connection-level
-  pin. Treat this as defence in depth, not as a complete rebinding defence.
+- **DNS rebinding is closed for direct connections.** The SSRF guard re-resolves
+  a hostname immediately before a socket opens, and the connection is then made
+  to that validated address rather than to whatever the name resolves to at dial
+  time. A hostname with no approval is refused rather than resolved. The one gap:
+  configuring a proxy puts name resolution on the proxy, where pinning cannot
+  reach, and `awsa` logs a warning rather than claiming a guarantee it cannot
+  keep there.
 - **`AWSA_RESPECT_ROBOTS=false` disables a safety feature.** Authorisation for
   whatever you then scrape is entirely your responsibility.
 - **Extraction quality is bounded by the source.** A well-quoted value from one

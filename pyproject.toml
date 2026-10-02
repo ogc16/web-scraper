@@ -23,7 +23,15 @@ classifiers = [
 ]
 dependencies = [
   "httpx>=0.27",
+  # DNS pinning reaches into httpcore's connection pool, which httpx does not
+  # expose. The floor is the first release with the pool signature
+  # `_assert_pool_contract` checks; the ceiling keeps a future major from
+  # changing that API underneath an already-shipped release.
+  "httpcore>=1.0.9,<2",
+  # Validates model output at the one untrusted boundary in the pipeline.
+  "pydantic>=2.7",
   "platformdirs>=4.0",
+  "tenacity>=8.2",
 ]
 
 [project.optional-dependencies]
@@ -32,6 +40,9 @@ dev = [
   "mypy>=1.11",
   "pytest>=8.0",
   "pytest-asyncio>=0.24",
+  # Used only for the provider-response tests, where asserting on a mocked HTTP
+  # exchange is clearer than standing up a server that speaks an LLM API.
+  "respx>=0.21",
   "ruff>=0.6",
 ]
 
@@ -107,6 +118,16 @@ ignore = [
   "ARG001", "ARG002", "ARG005",
   "SLF001",  # tests legitimately reach into private helpers
 ]
+# `httpcore.AsyncNetworkBackend` is an abstract base class: its method
+# signatures fix the parameter names, so `timeout` cannot be renamed without
+# breaking the override. ASYNC109 wants an `asyncio.timeout` context manager
+# instead, and has no answer for "this signature is not mine to choose". The
+# ignore lives here rather than inline because the formatter reflows these
+# signatures and drops a trailing `# noqa`.
+"src/awsa/net/pinning.py" = ["ASYNC109"]
+# The test double implements the same ABC, so the same signature constraint
+# applies.
+"tests/test_pinning.py" = ["ASYNC109"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
@@ -138,7 +159,8 @@ module = [
     "test_http",
     "test_loop",
     "test_models",
-  "test_providers",
+    "test_pinning",
+    "test_providers",
   "test_report",
   "test_robots",
   "test_verifier",

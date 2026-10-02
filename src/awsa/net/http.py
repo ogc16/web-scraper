@@ -17,14 +17,28 @@ from typing import Final, Self
 from urllib.parse import urlsplit
 
 import httpx
+from tenacity import (
+    AsyncRetrying,
+    RetryCallState,
+    retry_if_exception_type,
+    stop_after_attempt,
+)
 
 from ..config import Config, NetworkSettings
-from ..errors import FetchError, NetworkBlocked, RobotsDenied, UnsafeURLError
+from ..errors import (
+    FetchError,
+    NetworkBlocked,
+    RobotsDenied,
+    UnsafeURLError,
+    _RetryableStatus,
+    _TransportFailure,
+)
 from ..models import FetchResult
 from ..observability import get_logger
 from .cache import CacheEntry, HttpCache, MemoryCache, ResponseCache
 from .client import build_async_client
 from .guard import SSRFGuard
+from .pinning import ApprovedHosts, PinningTransport
 from .ratelimit import HostPacer
 from .robots import RobotsCache, RobotsPolicy, decide, parse_robots
 
@@ -71,6 +85,14 @@ class HttpFetcher:
         )
         self._client: httpx.AsyncClient | None = None
         self._transport = transport
+        # Shared with the pinning transport: every host the guard clears is
+        # recorded here immediately before the socket opens, so the dial can only
+        # reach an address that was validated a moment earlier. Inert when a
+        # transport is injected instead (tests, `--no-network`).
+        self.approved = ApprovedHosts()
+        # Round-robin cursor for opt-in UA rotation. Starts at 0, so the first
+        # request always uses the primary agent regardless of configuration.
+        self._ua_index = 0
         self.stats: dict[str, int] = {
             "requests": 0,
             "cache_hits": 0,
@@ -106,14 +128,29 @@ class HttpFetcher:
             return
         limits = httpx.Limits(max_connections=16, max_keepalive_connections=8)
         timeout = httpx.Timeout(self.net.timeout_seconds, connect=self.net.connect_timeout_seconds)
+        transport = self._transport
+        if transport is None and self.net_enabled:
+            # Pin connections to the addresses the guard approved. Without this
+            # the client resolves the name a second time, on its own, after the
+            # recheck, and that gap is the DNS rebinding window.
+            # trust_env/limits/tls follow httpx's own defaults, so a pinned client
+            # behaves exactly like an unpinned one apart from the dial target.
+            transport = PinningTransport(
+                self.approved,
+                limits=limits,
+                verify=self.net.verify_tls,
+            )
         self._client = build_async_client(
             network_enabled=self.net_enabled,
             timeout=timeout,
             limits=limits,
             follow_redirects=False,
             verify=self.net.verify_tls,
-            transport=self._transport,
+            transport=transport,
             headers={
+                # Placeholder when rotation is enabled; the real value is set
+                # per request in _request_with_retries. httpx needs a UA here to
+                # avoid its own default, so the primary agent is the safe seed.
                 "User-Agent": self.net.user_agent,
                 "Accept": "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.5",
                 "Accept-Language": "en",
@@ -143,6 +180,16 @@ class HttpFetcher:
             if cached is not None:
                 return cached
         robots_url = f"{origin}/robots.txt"
+        # robots.txt is a second, independent request, so it needs its own guard
+        # pass and its own published address -- it is not covered by the page
+        # request's approval. Same origin, so the outcome matches the page's.
+        try:
+            self._guard_and_approve(robots_url, approved=self.guard.check(robots_url).resolved)
+        except NetworkBlocked:
+            log.debug("robots.txt is not fetchable under the SSRF guard for %s", origin)
+            policy = parse_robots("", user_agent=self.net.user_agent)
+            self.robots.put(origin, policy)
+            return policy
         try:
             response = await client.get(
                 robots_url,
@@ -305,6 +352,38 @@ class HttpFetcher:
         msg = f"exceeded {self.net.max_redirects} redirects starting at {url}"
         raise FetchError(msg)
 
+    def _user_agent_for(self) -> str:
+        """Pick the User-Agent for the next request.
+
+        Returns the single configured agent unless ``user_agent_rotation`` was
+        explicitly populated, in which case one is chosen per request. The
+        rotation is a round-robin rather than a random draw so a run is
+        reproducible from its seed, matching the pacer's jitter.
+        """
+        pool = self.net.user_agent_rotation
+        if not pool:
+            return self.net.user_agent
+        index = self._ua_index % len(pool)
+        self._ua_index += 1
+        return pool[index]
+
+    def _guard_and_approve(self, url: str, *, approved: tuple[str, ...]) -> None:
+        """Re-validate ``url``, then publish its address to the pinning transport.
+
+        Both halves are required. ``recheck`` re-resolves the name so a record
+        that flipped to an internal address between validation and connection is
+        caught; ``approve`` hands that exact answer to the transport, so the dial
+        uses it instead of the client's own later resolution. Checking without
+        approving leaves the rebinding window open; approving without checking
+        trusts a stale answer.
+        """
+        fresh = self.guard.recheck(url, approved=approved)
+        if not fresh.allowed:
+            self.stats["blocked"] += 1
+            raise NetworkBlocked(f"refusing to fetch {url!r}: {fresh.reason}", detail=fresh.reason)
+        if fresh.host:
+            self.approved.approve(fresh.host, fresh.resolved)
+
     async def _request_with_retries(
         self,
         client: httpx.AsyncClient,
@@ -316,12 +395,17 @@ class HttpFetcher:
         verdict = self.guard.check(url)
         host = verdict.host or "unknown"
         approved = verdict.resolved
-        last_error: Exception | None = None
         attempts = self.net.max_retries + 1
 
-        for attempt in range(attempts):
+        async def attempt_once() -> FetchResult:
+            """One request attempt; raise to ask for a retry.
+
+            Split out so the retry policy -- how many attempts, how long to
+            wait, what counts as retryable -- is stated once as data rather than
+            threaded through loop bookkeeping.
+            """
             await self.pacer.acquire(host)
-            headers = {"Accept": accept}
+            headers = {"Accept": accept, "User-Agent": self._user_agent_for()}
             if conditional is not None:
                 if conditional.etag:
                     headers["If-None-Match"] = conditional.etag
@@ -332,12 +416,7 @@ class HttpFetcher:
             # public at validation time may have been rebound to an internal
             # address by now, and the client resolves the name itself, so the
             # only place to catch that is right here.
-            fresh = self.guard.recheck(url, approved=approved)
-            if not fresh.allowed:
-                self.stats["blocked"] += 1
-                raise NetworkBlocked(
-                    f"refusing to fetch {url!r}: {fresh.reason}", detail=fresh.reason
-                )
+            self._guard_and_approve(url, approved=approved)
 
             started = time.perf_counter()
             self.stats["requests"] += 1
@@ -359,24 +438,32 @@ class HttpFetcher:
                             from_cache=True,
                         )
 
-                    if response.status_code in _RETRY_STATUSES and attempt < attempts - 1:
-                        retry_after = _parse_retry_after(response.headers.get("retry-after"))
-                        delay = self.pacer.penalize(host, retry_after=retry_after)
-                        log.debug(
-                            "%s -> %s, backing off %.2fs (attempt %d/%d)",
-                            url,
-                            response.status_code,
-                            delay,
-                            attempt + 1,
-                            attempts,
-                        )
-                        await response.aclose()
-                        await asyncio.sleep(min(delay, self.net.backoff_max_seconds))
-                        self.stats["retries"] += 1
-                        continue
-
+                    # Read the body even for a retryable status, so that if the
+                    # retries run out the final status can still be returned
+                    # intact rather than discarded. The byte cap bounds the cost.
                     body = await self._read_capped(response)
                     self.stats["bytes"] += len(body)
+
+                    if response.status_code in _RETRY_STATUSES:
+                        raise _RetryableStatus(
+                            status=response.status_code,
+                            delay=self.pacer.penalize(
+                                host,
+                                retry_after=_parse_retry_after(response.headers.get("retry-after")),
+                            ),
+                            result=FetchResult(
+                                url=url,
+                                status=response.status_code,
+                                content_type=response.headers.get("content-type", "text/html"),
+                                body=body,
+                                final_url=str(response.url),
+                                elapsed_ms=elapsed,
+                                etag=response.headers.get("etag"),
+                                last_modified=response.headers.get("last-modified"),
+                                location=response.headers.get("location", ""),
+                            ),
+                        )
+
                     self.pacer.relax(host)
                     return FetchResult(
                         url=url,
@@ -390,19 +477,80 @@ class HttpFetcher:
                         location=response.headers.get("location", ""),
                     )
             except (httpx.TimeoutException, httpx.TransportError) as exc:
-                last_error = exc
-                if attempt >= attempts - 1:
-                    break
-                delay = min(
-                    self.net.backoff_max_seconds,
-                    self.net.backoff_base_seconds * (2**attempt),
-                )
-                log.debug("network error on %s (%s), retrying in %.2fs", url, exc, delay)
-                await asyncio.sleep(delay)
-                self.stats["retries"] += 1
+                raise _TransportFailure(detail=str(exc)) from exc
 
-        msg = f"failed to fetch {url} after {attempts} attempt(s)"
-        raise FetchError(msg, detail=str(last_error) if last_error else "exhausted retries")
+        retrying = AsyncRetrying(
+            stop=stop_after_attempt(attempts),
+            retry=retry_if_exception_type((_RetryableStatus, _TransportFailure)),
+            wait=self._retry_delay,
+            sleep=asyncio.sleep,
+            # bound to `url` so the log line names the request; tenacity's
+            # hook signature only carries the retry state.
+            before_sleep=lambda state: self._note_retry(state, url),
+            # The final failure is translated below, so tenacity must hand back
+            # the original exception rather than wrapping it in RetryError.
+            reraise=True,
+        )
+
+        try:
+            return await retrying(attempt_once)
+        except _RetryableStatus as final:
+            # The host answered, it just kept saying "try later". That is a
+            # result, not a failure, and the caller can report it far more
+            # usefully than "the fetch failed".
+            self.pacer.relax(host)
+            return final.result
+        except (_TransportFailure, httpx.TimeoutException, httpx.TransportError) as exc:
+            detail = getattr(exc, "detail", "") or str(exc)
+            msg = f"failed to fetch {url} after {attempts} attempt(s)"
+            raise FetchError(msg, detail=detail) from exc
+
+    def _retry_delay(self, state: RetryCallState) -> float:
+        """Seconds to wait before the next attempt, per failure kind.
+
+        A retryable *status* already carries a delay the pacer computed from
+        ``Retry-After`` and the host's throttle history. A transport failure has
+        no such signal, so it falls back to exponential backoff on the attempt
+        number. Both are capped so a hostile or misconfigured server cannot
+        stretch a run indefinitely.
+        """
+        outcome = state.outcome
+        if outcome is None or not outcome.failed:
+            return 0.0
+        error = outcome.exception()
+        if isinstance(error, _RetryableStatus):
+            return min(error.delay, self.net.backoff_max_seconds)
+        # attempt_number is 1-based, so the first failure backs off by 2**0.
+        attempt = max(1, int(state.attempt_number))
+        delay: float = min(
+            self.net.backoff_max_seconds,
+            self.net.backoff_base_seconds * (2 ** (attempt - 1)),
+        )
+        return delay
+
+    def _note_retry(self, state: RetryCallState, url: str) -> None:
+        """Count a pending retry and log the specific reason for it.
+
+        The two failure kinds mean different things to whoever reads the log, so
+        they are reported distinctly rather than collapsed into "retrying": a
+        status means the host is throttling us, a transport failure means we
+        could not reach it at all.
+        """
+        self.stats["retries"] += 1
+        delay = self._retry_delay(state)
+        outcome = state.outcome
+        error = outcome.exception() if outcome is not None and outcome.failed else None
+        if isinstance(error, _RetryableStatus):
+            log.debug(
+                "%s -> %d, backing off %.2fs (attempt %d/%d)",
+                url,
+                error.status,
+                delay,
+                state.attempt_number,
+                self.net.max_retries + 1,
+            )
+        else:
+            log.debug("network error on %s (%s), retrying in %.2fs", url, error, delay)
 
     async def _read_capped(self, response: httpx.Response) -> bytes:
         """Read the body, aborting if it exceeds ``max_page_bytes``."""

@@ -24,12 +24,14 @@ from dataclasses import dataclass
 from typing import Any, Final
 
 import httpx
+from pydantic import ValidationError
 
 from ..config import Config
 from ..errors import ProviderError
 from ..net.client import build_async_client
 from ..observability import get_logger
 from .base import ExtractedField, ExtractRequest, LLMUsage, PlanRequest
+from .schemas import ExtractedFieldRow, QueryEnvelope
 
 __all__ = ["OpenAICompatLLM"]
 
@@ -212,7 +214,7 @@ class OpenAICompatLLM:
 
             return await ExtractiveLLM().plan_queries(request)
 
-        queries = _parse_string_array(content)
+        queries = _validated_queries(content)
         if not queries:
             from .llm_extractive import ExtractiveLLM
 
@@ -255,14 +257,14 @@ class OpenAICompatLLM:
             log.warning("field extraction via LLM failed for %s: %s", request.page_url, exc)
             return []
 
-        rows = _parse_object_array(content)
+        rows = _validated_rows(content)
         out: list[ExtractedField] = []
         lowered_text = request.page_text.lower()
         for row in rows:
-            name = str(row.get("field", "")).strip()
-            value = str(row.get("value", "")).strip()
-            quote = str(row.get("quote", "")).strip()
-            if not name or name not in allowed or not value:
+            name = row.field.strip()
+            value = row.value.strip()
+            quote = row.quote.strip()
+            if name not in allowed or not value:
                 continue
             if not quote or quote.lower() not in lowered_text:
                 if value.lower() not in lowered_text:
@@ -271,13 +273,12 @@ class OpenAICompatLLM:
                 quote = _sentence_containing(request.page_text, value)
                 if not quote:
                     continue
-            confidence = _coerce_confidence(row.get("confidence"))
             out.append(
                 ExtractedField(
                     field=name,
                     value=value,
                     quote=_clip(quote, request.max_snippet_chars),
-                    confidence=confidence,
+                    confidence=row.confidence,
                     char_start=request.page_text.find(quote),
                 )
             )
@@ -309,6 +310,39 @@ def _parse_string_array(content: str) -> list[str]:
         if isinstance(parsed, list):
             return [str(item) for item in parsed if isinstance(item, (str, int, float))]
     return []
+
+
+def _validated_rows(content: str) -> list[ExtractedFieldRow]:
+    """Parse and validate an extraction response into schema-checked rows.
+
+    A row that fails validation is dropped and logged rather than coerced. The
+    alternative -- ``str(row.get("value"))`` -- turns a model's ``null`` into the
+    literal text "None", which then reads as an extracted value and can end up
+    cited as evidence in a report. A dropped row is a visible loss; a fabricated
+    one is a silent lie.
+    """
+    raw = _parse_object_array(content)
+    rows: list[ExtractedFieldRow] = []
+    for candidate in raw:
+        try:
+            rows.append(ExtractedFieldRow.model_validate(candidate))
+        except ValidationError as exc:
+            log.debug("dropping malformed extraction row: %s", exc.errors()[0].get("msg"))
+    return rows
+
+
+def _validated_queries(content: str) -> list[str]:
+    """Parse and validate a query-planning response, falling back to raw strings.
+
+    Query planning is tolerant by design -- a slightly off response should still
+    produce *some* queries rather than none -- so this keeps the lenient string
+    path as a fallback and only prefers the schema when the response fits it.
+    """
+    try:
+        envelope = QueryEnvelope.model_validate({"queries": _parse_string_array(content)})
+    except ValidationError:
+        return _parse_string_array(content)
+    return envelope.queries
 
 
 def _parse_object_array(content: str) -> list[dict[str, Any]]:
@@ -361,21 +395,6 @@ def _sentence_containing(text: str, needle: str) -> str:
     end_candidates = [i for i in (text.find(".", position), text.find("\n", position)) if i > 0]
     end = min(end_candidates) if end_candidates else min(len(text), position + 300)
     return text[start:end].strip()
-
-
-def _coerce_confidence(value: Any) -> float:
-    if isinstance(value, bool):
-        return 0.3
-    if isinstance(value, (int, float)):
-        score = float(value)
-    elif isinstance(value, str):
-        lowered = value.strip().lower()
-        score = {"high": 0.85, "medium": 0.6, "low": 0.35}.get(lowered, 0.5)
-    else:
-        return 0.5
-    if score > 1.0:
-        score = score / 10.0 if score <= 10 else 1.0
-    return min(1.0, max(0.0, score))
 
 
 def _clip(text: str, limit: int) -> str:

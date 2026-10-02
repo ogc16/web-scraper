@@ -227,6 +227,39 @@ class TestRobots:
         async with HttpFetcher(waived) as f:
             assert (await f.fetch(server.url("/private/secret"))).status == 404
 
+    async def test_robots_fetch_is_pinned_too(self, config: Config, server: FixtureServer) -> None:
+        """robots.txt is a second request, so it needs its own approval.
+
+        The robots fetch happens before the page fetch, from the same client. If
+        it did not publish an address, the pinning transport would refuse it as
+        an unvetted host -- which is exactly what happened before the robots path
+        was given a guard pass.
+        """
+        async with HttpFetcher(config) as f:
+            await f.fetch(server.url("/people"))
+
+        # The fetch succeeded, so the robots request passed through the pinning
+        # backend without being refused.
+        assert server.state.hits.get("/robots.txt", 0) >= 1
+        assert f.stats["blocked"] == 0
+
+    async def test_robots_fetch_is_guarded(self, config: Config, server: FixtureServer) -> None:
+        """A blocked origin must not have its robots.txt fetched at all."""
+        from awsa.net.guard import SSRFGuard
+
+        # The blocklist makes the guard reject without needing the real
+        # resolution to differ, which keeps the test about the robots path
+        # rather than about loopback being private.
+        strict = SSRFGuard(
+            allow_private_hosts=True,
+            blocklist=["127.0.0.1"],
+        )
+        async with HttpFetcher(config, guard=strict) as f:
+            with pytest.raises(UnsafeURLError):
+                await f.fetch(server.url("/people"))
+
+        assert server.state.hits.get("/robots.txt", 0) == 0
+
 
 class TestCaching:
     async def test_second_request_is_served_from_cache(
@@ -306,3 +339,74 @@ class TestHostPacer:
         started = asyncio.get_running_loop().time()
         await pacer.acquire("a.test")
         assert asyncio.get_running_loop().time() - started < 0.2
+
+
+class TestUserAgentOnTheWire:
+    """What the server actually sees for ``User-Agent``.
+
+    Asserted at the socket rather than on the config, because the header is
+    computed per request: a config-level assertion would pass even if the value
+    never reached the wire.
+    """
+
+    async def test_the_configured_agent_is_sent_by_default(
+        self, config: Config, server: FixtureServer
+    ) -> None:
+        async with HttpFetcher(config) as f:
+            await f.fetch(server.url("/people"))
+
+        assert config.network.user_agent in server.state.agents
+        # The default is one stable identity, so every request presents the same
+        # one. Rotation is opt-in and must not happen by accident.
+        assert set(server.state.agents) == {config.network.user_agent}
+
+    async def test_rotation_alternates_when_explicitly_configured(
+        self, config: Config, server: FixtureServer
+    ) -> None:
+        rotating = replace(
+            config,
+            network=replace(
+                config.network,
+                user_agent="primary/1 (+https://example.test/bot)",
+                user_agent_rotation=("second/2 (+https://example.test/bot)", "third/3"),
+            ),
+        )
+        async with HttpFetcher(rotating) as f:
+            for _ in range(4):
+                await f.fetch(server.url(f"/people?{_}"))
+
+        page_agents = [
+            agent for agent in server.state.agents if agent != rotating.network.user_agent
+        ]
+        # Round-robin, so a short run still reaches every configured identity
+        # rather than missing one at random.
+        assert page_agents
+        assert set(page_agents) == set(rotating.network.user_agent_rotation)
+
+    async def test_rotation_wraps_around(self, config: Config) -> None:
+        rotating = replace(
+            config, network=replace(config.network, user_agent_rotation=("a/1", "b/2"))
+        )
+        async with HttpFetcher(rotating) as f:
+            picks = [f._user_agent_for() for _ in range(5)]
+
+        assert picks == ["a/1", "b/2", "a/1", "b/2", "a/1"]
+
+    async def test_no_rotation_means_the_same_agent_every_call(self, config: Config) -> None:
+        async with HttpFetcher(config) as f:
+            picks = [f._user_agent_for() for _ in range(3)]
+
+        assert picks == [config.network.user_agent] * 3
+
+    async def test_the_first_request_uses_the_primary_agent(
+        self, config: Config, server: FixtureServer
+    ) -> None:
+        # Whatever the rotation, request one is the configured identity, so a
+        # run is attributable to its configured agent from the first byte.
+        rotating = replace(
+            config, network=replace(config.network, user_agent_rotation=("second/2",))
+        )
+        async with HttpFetcher(rotating) as f:
+            await f.fetch(server.url("/people"))
+
+        assert server.state.agents[0] == rotating.network.user_agent

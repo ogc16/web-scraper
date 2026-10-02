@@ -449,9 +449,13 @@ class ResearchReport:
         }
 
     def to_json(self, *, indent: int = 2) -> str:
-        import json
+        from .report import dump_json
 
-        return json.dumps(self.as_dict(), indent=indent, ensure_ascii=False, default=str)
+        # Routed through the reporter's strict serialiser rather than calling
+        # json.dumps here, so a report cannot be rendered by one path permissively
+        # and by another strictly depending on which function the caller reached
+        # for. `default=str` would paper over the exact bug this guards.
+        return dump_json(self.as_dict(), indent=indent)
 
     def with_sources(self, sources: Iterable[Source]) -> ResearchReport:
         return replace(self, sources=tuple(sources))

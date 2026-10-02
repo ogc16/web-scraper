@@ -293,3 +293,42 @@ class TestEnvIsolation:
         # otherwise a stray variable on a developer's machine changes the result.
         monkeypatch.setenv("AWSA_LLM_MODEL", "from-process-env")
         assert Config.from_env({}).providers.llm_model == "gpt-4o-mini"
+
+
+class TestUserAgentRotation:
+    """UA rotation is opt-in and defaults to one stable, honest identity.
+
+    The default matters more than the feature. A rotating pool of identities is
+    a way to look like several different clients, which is the mechanism bot
+    detection uses to recognise automated traffic, so it is never enabled
+    implicitly -- the empty default is the safe behaviour, not a missing one.
+    """
+
+    def test_the_default_is_a_single_agent(self) -> None:
+        net = NetworkSettings()
+        assert net.user_agent == DEFAULT_USER_AGENT
+        assert net.user_agent_rotation == ()
+
+    def test_rotation_is_empty_when_the_env_var_is_unset(self) -> None:
+        assert Config.from_env({}).network.user_agent_rotation == ()
+
+    def test_rotation_parses_a_comma_separated_list(self) -> None:
+        net = Config.from_env({"AWSA_USER_AGENT_ROTATION": "one/1, two/2 ,three/3"}).network
+        assert net.user_agent_rotation == ("one/1", "two/2", "three/3")
+
+    def test_blank_entries_are_dropped_rather_than_sent(self) -> None:
+        # An empty UA is treated by some hosts as "not a browser at all".
+        net = Config.from_env({"AWSA_USER_AGENT_ROTATION": "one/1, ,  ,two/2"}).network
+        assert net.user_agent_rotation == ("one/1", "two/2")
+
+    def test_a_blank_user_agent_is_rejected(self) -> None:
+        with pytest.raises(ConfigError, match="user_agent must not be blank"):
+            NetworkSettings(user_agent="   ")
+
+    def test_a_blank_rotation_entry_is_rejected(self) -> None:
+        with pytest.raises(ConfigError, match="must not be blank"):
+            NetworkSettings(user_agent="primary/1", user_agent_rotation=("ok/1", "  "))
+
+    def test_repeating_the_primary_agent_is_rejected(self) -> None:
+        with pytest.raises(ConfigError, match="should not repeat"):
+            NetworkSettings(user_agent="primary/1", user_agent_rotation=("primary/1",))

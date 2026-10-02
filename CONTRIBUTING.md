@@ -9,6 +9,11 @@ By participating you agree to abide by the [Code of Conduct](CODE_OF_CONDUCT.md)
 There is no contributor license agreement. Contributions land under the same
 [MIT Licence](LICENSE) as the rest of the project, and no signature is needed.
 
+If you want something to pick up, [ROADMAP.md](ROADMAP.md) §1 lists what is
+genuinely unfinished. §3 of that file records what has already been decided
+against, and why — read it before proposing a change that duplicates a decision
+someone already made.
+
 ## Quick start
 
 Requires Python 3.11+.

@@ -79,11 +79,17 @@ Deliberate, non-defences — these are documented behaviour, **not** vulnerabili
   destinations, which is what makes the SSRF guard stop working. It exists so
   the test suite can reach a local fixture server. Do not enable it against
   untrusted input.
-- **DNS rebinding is mitigated, not eliminated.** The guard re-resolves and
-  discards private answers before the socket opens, but `httpx` resolves
-  independently when it dials. The gap between check and connect is not closed
-  by a true connection-level pin. This is a known limitation, documented in
-  [SUPPORT.md](SUPPORT.md).
+- **DNS rebinding is closed for direct connections, and disabled for proxies.**
+  The guard re-resolves immediately before the socket opens, and the validated
+  address is then the address dialled (`net/pinning.py`), so the client never
+  resolves the name for itself. A host with no approval is refused rather than
+  resolved. When a proxy is configured the proxy performs the resolution, so
+  pinning cannot apply; `PinningTransport` logs a warning and does not claim
+  otherwise. Treat proxy use as outside this protection.
+- **`httpcore` is a pinned dependency for this reason.** Pinning installs a
+  network backend into httpcore's connection pool, which httpx does not expose.
+  An httpcore release that changes the pool signature will raise at client
+  construction rather than silently reverting to unpinned connections.
 - **Scraping public pages can still be unlawful** depending on jurisdiction and
   the target's terms. That is an operator responsibility, not a code defect.
 

@@ -83,6 +83,11 @@ class NetworkSettings:
     """Politeness, safety and resource limits applied to every outbound request."""
 
     user_agent: str = DEFAULT_USER_AGENT
+    #: Extra user agents to rotate through, beyond ``user_agent``. Empty by
+    #: default, which means one honest, stable identifier -- the intended
+    #: behaviour. Populating this is an opt-in decision to present several
+    #: identities, so it is never inferred and never set implicitly.
+    user_agent_rotation: tuple[str, ...] = ()
     timeout_seconds: float = 20.0
     connect_timeout_seconds: float = 10.0
     max_retries: int = 3
@@ -109,6 +114,19 @@ class NetworkSettings:
             raise ConfigError(msg)
         if self.per_host_delay_seconds < 0:
             msg = "per_host_delay_seconds must be >= 0"
+            raise ConfigError(msg)
+        if not self.user_agent.strip():
+            msg = "user_agent must not be blank"
+            raise ConfigError(msg)
+        if any(not agent.strip() for agent in self.user_agent_rotation):
+            # A blank entry would send an empty UA, which some hosts treat as
+            # "no automated client" and reject outright.
+            msg = "user_agent_rotation entries must not be blank"
+            raise ConfigError(msg)
+        if self.user_agent in self.user_agent_rotation:
+            # Harmless, but almost certainly a mistake: rotating a set that
+            # contains the primary UA just makes the primary less likely.
+            msg = "user_agent_rotation should not repeat user_agent"
             raise ConfigError(msg)
         if self.max_page_bytes < 1024:
             msg = "max_page_bytes must be >= 1024"
@@ -218,6 +236,13 @@ class Config:
 
         network = NetworkSettings(
             user_agent=get("AWSA_USER_AGENT") or DEFAULT_USER_AGENT,
+            # Comma-separated, e.g. "awsa/0.1 (+https://...), my-bot/2".
+            # Unset by default, which leaves a single stable identity in place.
+            user_agent_rotation=tuple(
+                agent.strip()
+                for agent in (get("AWSA_USER_AGENT_ROTATION") or "").split(",")
+                if agent.strip()
+            ),
             timeout_seconds=as_float("AWSA_TIMEOUT", 20.0),
             max_retries=as_int("AWSA_MAX_RETRIES", 3),
             per_host_delay_seconds=as_float("AWSA_PER_HOST_DELAY", 1.0),

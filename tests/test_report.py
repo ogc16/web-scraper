@@ -14,6 +14,7 @@ from datetime import UTC, datetime
 import pytest
 
 from awsa import models
+from awsa.errors import SerializationError
 from awsa.models import (
     Budget,
     Claim,
@@ -23,7 +24,7 @@ from awsa.models import (
     Source,
     Usage,
 )
-from awsa.report import render, render_json, render_markdown, render_plain
+from awsa.report import dump_json, render, render_json, render_markdown, render_plain
 
 
 def _source(url: str, title: str = "T") -> Source:
@@ -235,3 +236,74 @@ class TestHonestyInOutput:
         claim = _claim(confidence=0.95, support=1, domains=("a.test",))
         text = render_markdown(_report(claims=(claim,)))
         assert "95%" in text or "0.95" in text
+
+
+class TestStrictSerialization:
+    """``dump_json`` refuses what it cannot represent instead of coercing it.
+
+    The coercion it replaces -- ``default=str`` -- turns a set into
+    ``"{'a', 'b'}"`` and an arbitrary object into ``"<object ...>"``, both of
+    which look like data to whatever reads the report later. Failing at the
+    boundary is the point: the error names the field, so it is fixable.
+    """
+
+    def test_a_set_is_refused_rather_than_stringified(self) -> None:
+        # Under the old serialiser this produced "{'a', 'b'}", which round-trips
+        # as a string and silently loses the distinction between a set and a
+        # one-element string.
+        with pytest.raises(SerializationError, match="set"):
+            dump_json({"tags": {"a", "b"}})
+
+    def test_bytes_are_refused(self) -> None:
+        with pytest.raises(SerializationError, match="bytes"):
+            dump_json({"raw": b"payload"})
+
+    def test_the_error_names_the_offending_path(self) -> None:
+        # A bare "Object of type object is not JSON serializable" leaves the
+        # caller hunting through a nested report; the path is what makes it
+        # actionable.
+        with pytest.raises(SerializationError) as excinfo:
+            dump_json({"claims": [{"evidence": [{"quote": object()}]}]})
+
+        assert "$.claims[0].evidence[0].quote" in str(excinfo.value)
+
+    def test_a_pathless_type_still_produces_a_message(self) -> None:
+        # Even when the walk cannot locate the value, the error must be raised
+        # and must say something useful.
+        with pytest.raises(SerializationError, match="JSON"):
+            dump_json({"weird": NotImplemented})
+
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            {"int": 1},
+            {"float": 1.5},
+            {"none": None},
+            {"bool": True},
+            {"str": "text"},
+            {"list": [1, "two", None]},
+            {"nested": {"deep": [{"x": 1}]}},
+        ],
+    )
+    def test_ordinary_payloads_still_serialise(self, payload: dict[str, object]) -> None:
+        # The strictness must not cost anything on the happy path.
+        assert json.loads(dump_json(payload)) == payload
+
+    def test_non_ascii_survives(self) -> None:
+        # ensure_ascii=False must be preserved, or non-Latin sources render as
+        # escapes and the output is unreadable to a human.
+        assert "???" in dump_json({"text": "???"})
+
+    def test_a_report_with_a_bad_field_fails_loudly(self) -> None:
+        # The end-to-end case: the reporter's own path, not just the helper.
+        report = _report(claims=(_claim(),))
+        payload = report.as_dict()
+        payload["claims"][0]["value"] = object()
+
+        with pytest.raises(SerializationError, match=r"\$\.claims\[0\]\.value"):
+            dump_json(payload)
+
+    def test_a_wellformed_report_serialises(self) -> None:
+        # And the ordinary path through to_json still works after the change.
+        text = render_json(_report(claims=(_claim(),)))
+        assert json.loads(text)["subject"] == "Ada Lovelace"

@@ -92,6 +92,10 @@ class ServerState:
     challenge: bool = False
     requests: list[str] = None  # type: ignore[assignment]
     hits: dict[str, int] = None  # type: ignore[assignment]
+    # Every User-Agent the server was asked to present, in order. Lets a test
+    # assert what identity the client actually sent, which headers alone cannot
+    # show once a value is computed per request.
+    agents: list[str] = None  # type: ignore[assignment]
     flaky_remaining: int = 0
     huge_bytes: int = 0
     etag: str | None = '"v1"'
@@ -140,6 +144,7 @@ class FixtureHandler(BaseHTTPRequestHandler):
         path = self._path()
         self.state.requests.append(self.path)
         self.state.hits[path] = self.state.hits.get(path, 0) + 1
+        self.state.agents.append(self.headers.get("User-Agent", ""))
 
         if path == "/robots.txt":
             self._send(200, self.state.robots or ROBOTS.format(host=""))
@@ -219,7 +224,7 @@ class FixtureHandler(BaseHTTPRequestHandler):
 @pytest.fixture
 def server() -> Iterator[FixtureServer]:
     """A real HTTP server on loopback serving the fixture pages."""
-    state = ServerState(requests=[], hits={})
+    state = ServerState(requests=[], hits={}, agents=[])
     FixtureHandler.state = state
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), FixtureHandler)
     # Backstop: a client that vanishes mid-response must not print a traceback

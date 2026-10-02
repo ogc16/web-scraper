@@ -459,3 +459,169 @@ class TestResultParsing:
 
     def test_iter_result_blocks_finds_each_result(self) -> None:
         assert len(list(iter_result_blocks(DDG_HTML))) == 2
+
+
+class TestSchemaValidatedExtraction:
+    """Model output is validated, not coerced.
+
+    These use ``respx`` to intercept the HTTP exchange because the assertion is
+    about *what the model sent back* -- the request/response pair is part of the
+    contract under test, and asserting on it directly is clearer than reading
+    the captured content out of a ``MockTransport`` callback.
+    """
+
+    @staticmethod
+    def _payload(content: object) -> dict[str, object]:
+        body = content if isinstance(content, str) else json.dumps(content)
+        return {"choices": [{"message": {"content": body}}]}
+
+    async def _run(self, content: object, text: str) -> Sequence[ExtractedField]:
+        import respx
+
+        from awsa.providers.llm_openai import OpenAICompatLLM
+
+        config = replace(
+            Config(),
+            providers=replace(
+                Config().providers,
+                openai_api_key="k",
+                openai_base_url="https://api.test/v1",
+                llm_model="m",
+            ),
+        )
+        llm = OpenAICompatLLM(config, model="m", max_retries=0)
+        with respx.mock:
+            respx.post("https://api.test/v1/chat/completions").mock(
+                return_value=httpx.Response(200, json=self._payload(content))
+            )
+            return await llm.extract_fields(_request(text))
+
+    async def test_a_null_value_is_dropped_not_stringified(self) -> None:
+        # The corruption this replaces: `str(row.get("value"))` turned None into
+        # the text "None", which reads as a real extracted value downstream.
+        fields = await self._run(
+            [{"field": "birth_date", "value": None, "quote": "born", "confidence": 0.9}],
+            "She was born in London.",
+        )
+        assert fields == []
+
+    async def test_the_literal_string_none_is_dropped(self) -> None:
+        fields = await self._run(
+            [{"field": "birth_date", "value": "None", "quote": "born", "confidence": 0.9}],
+            "She was born in London.",
+        )
+        assert fields == []
+
+    async def test_a_good_row_survives_alongside_a_bad_one(self) -> None:
+        # Validation must be per row: one malformed entry must not discard a
+        # valid extraction that arrived in the same response.
+        fields = await self._run(
+            [
+                {"field": "birth_date", "value": None, "quote": "", "confidence": 0.9},
+                {
+                    "field": "birth_date",
+                    "value": "10 December 1815",
+                    "quote": "She was born on 10 December 1815",
+                    "confidence": 0.9,
+                },
+            ],
+            "She was born on 10 December 1815 in London.",
+        )
+        assert [f.value for f in fields] == ["10 December 1815"]
+
+    async def test_a_qualitative_confidence_is_mapped(self) -> None:
+        fields = await self._run(
+            [
+                {
+                    "field": "birth_date",
+                    "value": "10 December 1815",
+                    "quote": "She was born on 10 December 1815",
+                    "confidence": "high",
+                }
+            ],
+            "She was born on 10 December 1815 in London.",
+        )
+        assert fields[0].confidence == 0.85
+
+    async def test_a_percentage_confidence_is_converted(self) -> None:
+        fields = await self._run(
+            [
+                {
+                    "field": "birth_date",
+                    "value": "10 December 1815",
+                    "quote": "She was born on 10 December 1815",
+                    "confidence": "90%",
+                }
+            ],
+            "She was born on 10 December 1815 in London.",
+        )
+        assert fields[0].confidence == 0.9
+
+    async def test_a_boolean_confidence_is_refused(self) -> None:
+        # `True` would otherwise coerce to 1.0, fabricating maximum confidence
+        # from a field that carried none.
+        fields = await self._run(
+            [
+                {
+                    "field": "birth_date",
+                    "value": "10 December 1815",
+                    "quote": "She was born on 10 December 1815",
+                    "confidence": True,
+                }
+            ],
+            "She was born on 10 December 1815 in London.",
+        )
+        assert fields == []
+
+    async def test_a_tenth_scale_score_is_rescaled_not_clamped(self) -> None:
+        fields = await self._run(
+            [
+                {
+                    "field": "birth_date",
+                    "value": "10 December 1815",
+                    "quote": "She was born on 10 December 1815",
+                    "confidence": 9,
+                }
+            ],
+            "She was born on 10 December 1815 in London.",
+        )
+        assert fields[0].confidence == 0.9
+
+    async def test_unparseable_confidence_drops_the_row(self) -> None:
+        # Defaulting this to 0.5 would present a parse failure as measured
+        # uncertainty, which is a different and more misleading claim.
+        fields = await self._run(
+            [
+                {
+                    "field": "birth_date",
+                    "value": "10 December 1815",
+                    "quote": "She was born on 10 December 1815",
+                    "confidence": "very high indeed",
+                }
+            ],
+            "She was born on 10 December 1815 in London.",
+        )
+        assert fields == []
+
+    async def test_a_missing_field_name_drops_the_row(self) -> None:
+        fields = await self._run(
+            [{"value": "10 December 1815", "quote": "She was born", "confidence": 0.9}],
+            "She was born on 10 December 1815 in London.",
+        )
+        assert fields == []
+
+    async def test_an_ungrounded_value_is_still_dropped(self) -> None:
+        # Validation is a schema check; the grounding check is separate and
+        # still runs, so a well-formed hallucination is still caught.
+        fields = await self._run(
+            [
+                {
+                    "field": "birth_date",
+                    "value": "10 December 1999",
+                    "quote": "She was born on 10 December 1999",
+                    "confidence": 0.99,
+                }
+            ],
+            "She was born on 10 December 1815 in London.",
+        )
+        assert fields == []

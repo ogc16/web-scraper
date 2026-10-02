@@ -9,12 +9,20 @@ re-running the agent.
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
+import re
+from collections.abc import Iterable, Sequence
 from typing import Any
 
+from .errors import SerializationError
 from .models import Claim, ResearchReport
 
-__all__ = ["render", "render_json", "render_markdown", "render_plain"]
+__all__ = [
+    "dump_json",
+    "render",
+    "render_json",
+    "render_markdown",
+    "render_plain",
+]
 
 _LABEL_MARK = {"high": "HIGH", "medium": "MED", "low": "LOW", "unknown": "----"}
 
@@ -183,5 +191,44 @@ def claims_to_rows(claims: Sequence[Claim]) -> list[dict[str, Any]]:
 
 
 def dump_json(payload: object, *, indent: int = 2) -> str:
-    """JSON-serialise arbitrary payload with stable key order."""
-    return json.dumps(payload, indent=indent, ensure_ascii=False, sort_keys=False, default=str)
+    """JSON-serialise a payload, refusing values JSON cannot represent.
+
+    ``default=str`` is the usual shortcut, and it is a trap here: it turns a
+    malformed claim field into a plausible-looking string and ships it. A report
+    that silently coerces is worse than one that fails, because the corruption
+    surfaces downstream, in someone else's analysis, with no error to trace.
+    So an unserialisable value is a hard error naming the offending key.
+    """
+    try:
+        return json.dumps(payload, indent=indent, ensure_ascii=False, sort_keys=False)
+    except TypeError as exc:
+        raise SerializationError(_explain_unsupported(payload, exc)) from exc
+
+
+def _explain_unsupported(payload: object, exc: TypeError) -> str:
+    """Name the path of the first unserialisable value, for an actionable error.
+
+    ``json`` only ever reports the offending *type*, not the field it came from,
+    so a bare message leaves the caller hunting through a nested structure.
+    """
+    bad = re.search(r"of type (\w+)", str(exc))
+    kind = bad.group(1) if bad else "unknown"
+    for path, value in _walk(payload):
+        if type(value).__name__ == kind:
+            return (
+                f"cannot serialise {path} of type {kind} to JSON; "
+                "fix the field or add a serializer for it"
+            )
+    return f"cannot serialise payload to JSON: {exc}"
+
+
+def _walk(payload: object, path: str = "$") -> Iterable[tuple[str, object]]:
+    """Yield ``(json-ish path, value)`` for every value reachable from a payload."""
+    if isinstance(payload, dict):
+        for key, value in payload.items():
+            yield from _walk(value, f"{path}.{key}")
+    elif isinstance(payload, (list, tuple)):
+        for index, value in enumerate(payload):
+            yield from _walk(value, f"{path}[{index}]")
+    else:
+        yield path, payload

@@ -54,7 +54,7 @@ confident-looking values would have hidden that difference from you.
 | Evidence | none, or one URL | **verbatim quote + URL + char offset, per value** |
 | Confidence | invented | **Wilson lower bound on cross-source agreement** |
 | Prompt injection | unhandled | **untrusted page text is delimited and instructed to never be obeyed** |
-| SSRF | unhandled | **scheme, credential, and resolved-IP checks on every request and redirect** |
+| SSRF | unhandled | **scheme, credential, and resolved-IP checks on every request and redirect; the vetted IP is the one dialled** |
 | robots.txt | ignored | **RFC 9309 parsing, honoured on every hop** |
 | Politeness | none | **per-host pacing, jittered backoff, `Retry-After`, crawl-delay, cache with ETag revalidation** |
 | Cost control | unbounded | **six independent budgets incl. wall clock; always returns a partial report** |
@@ -97,7 +97,9 @@ pip install -e .
 awsa doctor
 ```
 
-Requires Python 3.11+. Two runtime dependencies: `httpx` and `platformdirs`.
+Requires Python 3.11+. Five runtime dependencies: `httpx` (HTTP), `platformdirs`
+(cache location), `httpcore` (connection pool, pinned for DNS pinning),
+`tenacity` (retry policy), `pydantic` (validating model output).
 
 ---
 
@@ -175,6 +177,8 @@ Everything is optional. Set only what you need.
 | `AWSA_NO_NETWORK` | open no sockets at all; answers come from a warm cache only |
 | `AWSA_RESPECT_ROBOTS` | set `false` to skip robots.txt (authorisation is your responsibility) |
 | `AWSA_PER_HOST_DELAY` | minimum seconds between requests to one host |
+| `AWSA_USER_AGENT` | identifies the client; defaults to `awsa/0.1 (+repo URL)` |
+| `AWSA_USER_AGENT_ROTATION` | comma-separated agents to rotate per request. Unset by default: one honest identity is the intended behaviour, see [ROADMAP.md](ROADMAP.md) §2 |
 | `AWSA_MAX_PAGES` / `AWSA_MAX_SEARCH_QUERIES` / `AWSA_MAX_WALL_SECONDS` | budget ceilings |
 | `AWSA_LOG_LEVEL` | `DEBUG` … `CRITICAL` |
 
@@ -260,7 +264,7 @@ flowchart TD
     fresh -- yes --> hit[return from cache]
     fresh -- no --> robots{robots.txt<br/>allows us?}
     robots -- no --> block3[RobotsDenied]
-    robots -- yes --> dial["request with backoff<br/>re-resolve DNS, drop<br/>private answers"]
+    robots -- yes --> dial["request with backoff<br/>re-resolve DNS, drop private<br/>answers, dial the vetted IP"]
     dial --> redirect{redirect?}
     redirect -- yes --> ssrc
     redirect -- no --> cap{within byte cap?}
@@ -555,6 +559,10 @@ paths are genuinely exercised.
 Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for the
 conventions CI enforces, and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) for the
 ground rules.
+
+[ROADMAP.md](ROADMAP.md) records what is genuinely unfinished, what was decided
+against, and what is only a property of the wider internet. There are no dates
+in it — the point is to know which "we are not doing this" is a decision.
 
 ---
 
