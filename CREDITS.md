@@ -8,11 +8,18 @@ Their code is **not** carried forward, because neither could run.
 | `ogc16/web-scraping-agent-demo` (`legacy-agent`) | OpenAI Agents SDK driving Bright Data's MCP server |
 | `ogc16/web-scraper` (`legacy-scraper`) | A ten-line `requests` script |
 
-Note on remotes: `awsa` now lives **in** `ogc16/web-scraper`, the repository that
-previously held the ten-line script. `legacy-scraper` is therefore the ancestor of
-the current `main` rather than a separate upstream, and the rewrite sits on top
-of it as ordinary commits. `legacy-agent` has unrelated history and remains a
-read-only reference.
+Note on remotes: `awsa` now lives **in** `ogc16/WebScraper` — the repository
+renamed from `ogc16/web-scraper` — which is the one that previously held the
+ten-line script. `legacy-scraper` is therefore the ancestor of the current `main`
+rather than a separate upstream, and the rewrite sits on top of it as ordinary
+commits. `legacy-agent` has unrelated history and remains a read-only reference.
+
+The old name still redirects on GitHub, so existing links keep working, but
+everything that ships with the package now names the current repository: the
+default `User-Agent`, the `pyproject.toml` URLs, and the install instructions.
+An earlier revision pointed the User-Agent at `ogc16/autonomous-web-scraper-agent`,
+which does not exist — so every request the tool made advertised a dead
+repository to the servers it was talking to.
 
 ## Why they were replaced rather than merged
 
@@ -31,17 +38,22 @@ read-only reference.
   reconciled what it found, so a hallucinated value looked identical to a
   verified one.
 
-**`web-scraper`** was, in full:
+**`web-scraper`** (now `WebScraper`) was, in full:
 
 ```python
 import requests
 
 result = requests.get("website url")
 user = result.json()
+name = f"""{user["results"][0]["name"]["first"]} {user["results"][0]["name"]["last"]}"""
+print(name)
+img = f"""{user["results"][0]["picture"]}"""
+print(img)
 ```
 
 `"website url"` is a literal string, not a variable, so the script raises
-`MissingSchema` on the first run. It was a sketch, not code.
+`MissingSchema` on the first run — it never reaches the response parsing. It was
+a sketch, not code.
 
 ## What was kept
 
@@ -68,6 +80,11 @@ The original code remains reachable in history:
 
 ```console
 git show legacy-agent/main:main.py
-git show legacy-scraper/main:main.py
+git show 280bb7c~1:main.py
 git log --oneline --all
 ```
+
+The ten-line script lives on this repository's own history, so it is addressed by
+commit rather than by remote: `280bb7c` is the relocation that moved it aside,
+and its parent is the last revision where `main.py` was still the top-level entry
+point. There was no separate upstream to fetch it from.

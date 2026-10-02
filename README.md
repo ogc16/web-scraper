@@ -91,8 +91,8 @@ before.
 ## Install
 
 ```console
-git clone https://github.com/ogc16/web-scraper
-cd web-scraper
+git clone https://github.com/ogc16/WebScraper
+cd WebScraper
 pip install -e .
 awsa doctor
 ```
@@ -577,12 +577,12 @@ in it — the point is to know which "we are not doing this" is a decision.
   service to hold to one.
 - **Security** — [SECURITY.md](SECURITY.md) for the private reporting channel,
   the threat model in one page, and what is deliberately *not* defended.
-- **Releases** — [releases](https://github.com/ogc16/web-scraper/releases). Each
+- **Releases** — [releases](https://github.com/ogc16/WebScraper/releases). Each
   release attaches the built wheel and sdist, so you can install without
   building:
 
   ```console
-  pip install https://github.com/ogc16/web-scraper/releases/download/v0.1.0/awsa-0.1.0-py3-none-any.whl
+  pip install https://github.com/ogc16/WebScraper/releases/download/v0.1.0/awsa-0.1.0-py3-none-any.whl
   ```
 
 ---

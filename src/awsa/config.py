@@ -20,7 +20,7 @@ from .models import Budget
 
 __all__ = ["DEFAULT_USER_AGENT", "Config", "redact"]
 
-DEFAULT_USER_AGENT: Final = "awsa/0.1 (+https://github.com/ogc16/autonomous-web-scraper-agent)"
+DEFAULT_USER_AGENT: Final = "awsa/0.1 (+https://github.com/ogc16/WebScraper)"
 
 _SECRET_FIELDS: Final[frozenset[str]] = frozenset(
     {

@@ -9,6 +9,8 @@ reach a log line or a printed report.
 from __future__ import annotations
 
 import dataclasses
+import re
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -22,6 +24,57 @@ from awsa.config import (
 )
 from awsa.errors import ConfigError
 from awsa.models import Budget
+
+
+class TestProjectUrls:
+    """The URLs we ship must name the repository that actually exists.
+
+    A release pointed its `User-Agent` and its `pyproject.toml` URLs at a
+    repository that was never created, so every request `awsa` made advertised a
+    dead project to whatever server it was talking to. Nothing failed, because a
+    `User-Agent` is an opaque string to the receiver — the bug was invisible to
+    both the code and the tests, and stayed invisible until someone checked the
+    URL resolved.
+    """
+
+    @staticmethod
+    def _project_urls() -> dict[str, str]:
+        pyproject = Path(__file__).resolve().parent.parent / "pyproject.toml"
+        declared = tomllib.loads(pyproject.read_text(encoding="utf-8"))["project"]["urls"]
+        assert isinstance(declared, dict)
+        return declared
+
+    @classmethod
+    def _repo_url(cls) -> str:
+        return cls._project_urls()["Homepage"]
+
+    def test_default_user_agent_names_the_homepage_repository(self) -> None:
+        # The User-Agent is sent to every host we contact, so its URL is the most
+        # widely published string in the package. It is derived rather than
+        # hardcoded in two places for the same reason the version is.
+        assert DEFAULT_USER_AGENT.endswith(f"(+{self._repo_url()})")
+
+    def test_issue_url_points_at_the_homepage_repository(self) -> None:
+        assert self._project_urls()["Issues"] == f"{self._repo_url()}/issues"
+
+    def test_every_shipped_url_names_one_repository(self) -> None:
+        # Catches the class of drift rather than one instance: a rename that
+        # updates some files and not others, or a doc link to a repository that
+        # was deleted. Only `ogc16/*` is checked, since other links (the Python
+        # docs, action deprecation notices) legitimately point elsewhere.
+        root = Path(__file__).resolve().parent.parent
+        targets: set[str] = set()
+        for path in sorted(root.rglob("*")):
+            if not path.is_file() or path.suffix not in {".md", ".py", ".toml", ".yml"}:
+                continue
+            if any(
+                part in {".git", ".venv", "__pycache__", "dist", "awsa.egg-info"}
+                for part in path.parts
+            ):
+                continue
+            text = path.read_text(encoding="utf-8")
+            targets.update(re.findall(r"https://github\.com/ogc16/[\w.-]+", text))
+        assert targets == {"https://github.com/ogc16/WebScraper"}
 
 
 class TestDefaults:

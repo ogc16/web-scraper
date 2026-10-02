@@ -9,7 +9,7 @@ fix before it ships.
 Use GitHub's private reporting, which is the channel for vulnerabilities in this
 repository:
 
-**[Report privately](https://github.com/ogc16/web-scraper/security/advisories/new)**
+**[Report privately](https://github.com/ogc16/WebScraper/security/advisories/new)**
 
 If that link is unavailable to you, email **82827770+ogc16@users.noreply.github.com**
 with `SECURITY` in the subject line. Either way, you will get an acknowledgement

@@ -1,4 +1,4 @@
-"""autonomous-web-scraper-agent (``awsa``).
+"""WebScraper (``awsa``).
 
 A small, honest, evidence-grounded research agent. It plans search queries,
 fetches pages politely, extracts structured claims with verbatim quotes, and

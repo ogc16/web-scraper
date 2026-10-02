@@ -21,8 +21,8 @@ What that means in practice:
 
 | I want to… | Go to |
 | --- | --- |
-| Report a bug | [Issues](https://github.com/ogc16/web-scraper/issues/new/choose) |
-| Ask how to use something | [Discussions](https://github.com/ogc16/web-scraper/discussions) |
+| Report a bug | [Issues](https://github.com/ogc16/WebScraper/issues/new/choose) |
+| Ask how to use something | [Discussions](https://github.com/ogc16/WebScraper/discussions) |
 | Propose a change | Read [CONTRIBUTING.md](CONTRIBUTING.md), then open a pull request |
 | Report a **security** issue | **Do not open a public issue.** See [SECURITY.md](SECURITY.md). |
 

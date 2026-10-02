@@ -19,8 +19,8 @@ someone already made.
 Requires Python 3.11+.
 
 ```console
-git clone https://github.com/ogc16/web-scraper
-cd web-scraper
+git clone https://github.com/ogc16/WebScraper
+cd WebScraper
 python -m venv .venv
 .venv/Scripts/python -m pip install -e ".[dev]"   # Windows
 .venv/bin/python   -m pip install -e ".[dev]"   # macOS / Linux

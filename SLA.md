@@ -32,7 +32,7 @@ obliged to be on call.
 
 | | |
 | --- | --- |
-| Channel | [GitHub Issues](https://github.com/ogc16/web-scraper/issues) |
+| Channel | [GitHub Issues](https://github.com/ogc16/WebScraper/issues) |
 | Hours | None. Responses arrive when the maintainer is available. |
 | P1 / P2 / P3 targets | None |
 
