@@ -1,0 +1,103 @@
+name: Bug report
+description: Something awsa does wrong, or refuses to do
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for filing this. Two things make a bug report much faster to
+        resolve: the exact command, and the output of `awsa doctor` and
+        `awsa --version`. The fields below ask for both because a report missing
+        them usually needs one round trip before anyone can reproduce it.
+
+        Not a bug? [ROADMAP.md](../blob/main/ROADMAP.md) §1 lists what is
+        genuinely unfinished — if your problem is on that list it is known, and a
+        comment there is more useful than a new issue.
+
+  - type: input
+    id: version
+    attributes:
+      label: "`awsa --version`"
+      description: Output of `awsa --version`, including the Python version.
+      placeholder: "awsa 0.1.0 / python 3.12.3"
+    validations:
+      required: true
+
+  - type: textarea
+    id: command
+    attributes:
+      label: Exact command
+      description: The command as you ran it, with any flags. Please redact API keys.
+      placeholder: "awsa research 'Acme Corp' -f 'founded:when founded' --budget deep"
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: What happened
+      description: What you saw. Include the error text verbatim rather than paraphrased.
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected instead
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: doctor
+    attributes:
+      label: "`awsa doctor` output"
+      description: |
+        Run `awsa doctor` and paste the whole thing. It lists which providers are
+        live and checks network reachability. Keys are masked in that output.
+      render: text
+    validations:
+      required: true
+
+  - type: dropdown
+    id: install
+    attributes:
+      label: How is awsa installed?
+      multiple: true
+      options:
+        - pip install awsa
+        - from source, editable install
+        - from source, built wheel
+        - other
+    validations:
+      required: true
+
+  - type: textarea
+    id: config
+    attributes:
+      label: Relevant configuration
+      description: |
+        Which `AWSA_*` variables you set, and which provider you expected to be
+        used. Names and booleans are enough — do not paste values.
+      placeholder: "AWSA_BRAVE_API_KEY set, AWSA_OFFLINE=false"
+      render: text
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Minimal reproduction
+      description: |
+        If you can get it down to one command, that is the single most useful
+        thing in this report. If not, say what you have already tried to rule out.
+      render: shell
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues for this.
+        - label: I checked ROADMAP.md §1 and this is not listed as known-open.
+        - label: I removed API keys, tokens and passwords from everything above.

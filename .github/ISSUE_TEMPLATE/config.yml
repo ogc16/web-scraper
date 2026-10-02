@@ -1,0 +1,12 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/ogc16/web-scraper/blob/main/SECURITY.md
+    about: |
+      Do not open a public issue for a suspected vulnerability. SECURITY.md has the
+      private reporting channel and states what is in scope.
+  - name: Question or usage help
+    url: https://github.com/ogc16/web-scraper/blob/main/SUPPORT.md
+    about: |
+      Support.md covers what this tool does not do, known limitations, and where to
+      ask. Most "it does not seem to work" reports are answered there.

@@ -181,7 +181,8 @@ Conventional prefixes (`feat`, `fix`, `docs`, `test`, `refactor`, `chore`),
 imperative mood, one logical change per commit. A commit that needs "and" in its
 message should probably be two commits.
 
-For a pull request:
+`.github/PULL_REQUEST_TEMPLATE.md` asks for these in order, so most of them arrive
+pre-filled with the question rather than needing to be remembered:
 
 - One concern per PR. Drive-by refactors in a feature PR make review harder than
   the change itself.

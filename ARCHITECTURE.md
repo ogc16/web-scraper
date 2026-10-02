@@ -203,14 +203,16 @@ lookup, because serving from disk needs no network.
 
 ```
 tests/
-  test_models.py        value semantics, Wilson bound, dedupe
+  test_models.py        value semantics, Wilson bound, dedupe, budget invariants
   test_config.py        env parsing, validation, redaction
   test_robots.py        RFC 9309 matching, specificity, crawl-delay
-  test_guard.py         SSRF rejections, DNS-rebinding re-checks
-  test_client.py        the network kill switch
+test_guard.py         SSRF rejections, DNS-rebinding re-checks
+  test_pinning.py       approved-address pinning, fail-closed, pool contract
+  test_client.py         the network kill switch
   test_cache.py         freshness, revalidation, corruption tolerance
   test_extract.py       HTML parser, main-content, cue extraction
-  test_providers.py     registry resolution, OpenAI parsing, injection containment
+  test_providers.py     registry resolution, OpenAI parsing, injection containment,
+                        schema rejection of malformed model output (respx)
   test_verifier.py      reconciliation, conflicts, corroboration
   test_loop.py          end-to-end against the fixture server
   test_http.py          redirects, retries, robots, caching, size caps

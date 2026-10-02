@@ -1,0 +1,75 @@
+name: Feature request
+description: Something awsa should do that it does not do yet
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Worth reading [ROADMAP.md](../blob/main/ROADMAP.md) §3 first — the
+        deliberate non-goals are decisions with stated reopening conditions, and
+        proposing one of those again without new information is unlikely to land.
+        If your idea *is* one of them, say what changed to reopen it.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: |
+        Describe the situation you are in and what you cannot currently do, rather
+        than the feature you imagine. The feature is often one option among
+        several that solve the same problem.
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you would like awsa to do
+      description: How you have solved it today, if you have, helps more than a spec.
+      render: text
+
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Rough size
+      options:
+        - Small — contained in one module
+        - Medium — spans a few modules, no new dependencies
+        - Large — new dependency, new provider, or changes the agent loop
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which area?
+      multiple: true
+      options:
+        - providers (search, fetch, LLM)
+        - extraction quality
+        - report and output formats
+        - CLI and configuration
+        - safety, SSRF guard, robots
+        - caching and network behaviour
+        - packaging, docs, developer experience
+    validations:
+      required: true
+
+  - type: textarea
+    id: cost
+    attributes:
+      label: What does this cost?
+      description: |
+        New runtime dependency, a new API key, extra network calls, more tokens,
+        slower runs? Cost is the most common reason a good idea gets declined, and
+        it is easier to argue about early.
+      render: text
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I read ROADMAP.md §3 and this does not duplicate an existing non-goal.
+        - label: I would be willing to implement it, or at least review an attempt.

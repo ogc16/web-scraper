@@ -21,10 +21,15 @@ What that means in practice:
 
 | I want to… | Go to |
 | --- | --- |
-| Report a bug | [Issues](https://github.com/ogc16/web-scraper/issues) |
-| Ask how to use something | [Issues](https://github.com/ogc16/web-scraper/issues) or [Discussions](https://github.com/ogc16/web-scraper/discussions) |
-| Report a **security** issue | **Do not open a public issue.** See [SECURITY.md](SECURITY.md). |
+| Report a bug | [Issues](https://github.com/ogc16/web-scraper/issues/new/choose) |
+| Ask how to use something | [Discussions](https://github.com/ogc16/web-scraper/discussions) |
 | Propose a change | Read [CONTRIBUTING.md](CONTRIBUTING.md), then open a pull request |
+| Report a **security** issue | **Do not open a public issue.** See [SECURITY.md](SECURITY.md). |
+
+The bug template asks for `awsa --version`, the exact command you ran, and
+`awsa doctor` output. Those three turn a round trip into a reproduction, and
+`awsa doctor` reports live providers and network reachability with keys already
+masked — but check your own text for secrets before pasting.
 
 Before filing a bug, please check that it is not one of the known limitations
 below — they are documented behaviour, not defects.

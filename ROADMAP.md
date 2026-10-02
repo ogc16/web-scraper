@@ -45,20 +45,18 @@ consumers, or a field whose invariants are currently split between `__post_init_
 and its callers. Otherwise leave them; mixed is a cost, but so is churn on code
 that is correct.
 
-### 1.2 Issue and pull request templates
-
-**Status:** open, small, uncontroversial.
-`CONTRIBUTING.md` now describes the contribution process and what CI enforces,
-but there is no `.github/ISSUE_TEMPLATE/` or pull request template to route
-people through it. A bug template asking for `awsa --version`, `awsa doctor`
-output and the exact command would save a round trip on every report. A PR
-template listing `make ci` and the doc-update expectations would do the same for
-contributors.
-
 ---
 
 ## 2. Recently decided
 
+- **Issue and pull request templates.** Shipped in `.github/`. The bug template
+  asks for `awsa --version`, the exact command and `awsa doctor` output, because a
+  report missing those needs a round trip before anyone can reproduce it; the
+  feature template points at §3 of this file before asking what the cost is; the
+  PR template restates the `make ci` and doc-update gates and carries a safety
+  checklist covering the SSRF guard, robots, prompt injection, secrets and
+  dependency pinning. Blank issues are off, with `SECURITY.md` and `SUPPORT.md` as
+  contact links so a vulnerability never starts as a public issue.
 - **DNS rebinding window closed at the socket.** `SSRFGuard.recheck` re-resolves
   before each socket opens, and `net/pinning.py` now makes that vetted address
   *the address dialled*, inside httpcore's network backend — so `Host` and TLS
