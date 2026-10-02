@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Sequence
-from dataclasses import replace
 from typing import Any
 
 import pytest
@@ -380,7 +379,7 @@ class TestReplanning:
         spec = ResearchSpec.build(
             "Ada Lovelace",
             ["name"],
-            budget=replace(Budget.preset("deep"), max_replans=2),
+            budget=Budget.preset("deep").with_updates(max_replans=2),
         )
         llm = FakeLLM(queries=["Ada Lovelace", "Ada Lovelace second source"])
         hits = {
@@ -400,7 +399,7 @@ class TestReplanning:
         spec = ResearchSpec.build(
             "Ada Lovelace",
             ["name", "birth_year"],
-            budget=replace(Budget.preset("deep"), max_replans=2),
+            budget=Budget.preset("deep").with_updates(max_replans=2),
         )
         # Only "name" is extractable, so "birth_year" is the gap that never
         # closes. Each query adds a distinct host, so after the first two rounds
@@ -430,7 +429,7 @@ class TestReplanning:
         spec = ResearchSpec.build(
             "Ada Lovelace",
             ["name"],
-            budget=replace(Budget.preset("deep"), max_replans=0),
+            budget=Budget.preset("deep").with_updates(max_replans=0),
         )
         # A query that keeps returning the same single-domain page can never be
         # corroborated, so the run must stop instead of spinning.
@@ -457,7 +456,7 @@ class TestReplanning:
         spec = ResearchSpec.build(
             "Ada Lovelace",
             ["name"],
-            budget=replace(Budget.preset("deep"), max_replans=3),
+            budget=Budget.preset("deep").with_updates(max_replans=3),
         )
         agent, _, llm = _agent(
             server,
@@ -471,7 +470,7 @@ class TestReplanning:
         spec = ResearchSpec.build(
             "Ada Lovelace",
             ["name"],
-            budget=replace(Budget.preset("deep"), max_replans=2),
+            budget=Budget.preset("deep").with_updates(max_replans=2),
         )
         # The re-plan hands back the same URL. Fetching it twice would inflate
         # apparent support, so the run must give up instead.

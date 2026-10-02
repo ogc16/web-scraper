@@ -18,7 +18,34 @@ See [SUPPORT.md](SUPPORT.md).
 
 ## 1. Open work
 
-### 1.1 Issue and pull request templates
+### 1.1 Convert the remaining ten dataclasses to pydantic
+
+**Status:** open, deliberately deferred, evidence in hand.
+
+`Budget` was converted as a pilot precisely to price this rather than guess. It
+came to 54 changed lines across `models.py`, `cli.py` and two test files, and the
+suite went from 558 to 560 tests with no gate weakened. So the cost is lower
+than the "45 `dataclasses.replace` call sites" figure previously recorded here
+suggested — that count included `str.replace` and friends, and the eleven
+dataclasses' real share was 7.
+
+**What the pilot actually bought, beyond consistency:** one real bug class
+surfaced. `pydantic`'s `model_copy(update=...)` skips validation, so a port that
+used it would have made `--max-replans -1` silently produce a run that ignores its
+own re-plan ceiling, where `dataclasses.replace` re-ran `__post_init__` and
+refused. `Budget.with_updates` validates instead, and a test pins that.
+
+**The honest counterweight, unchanged:** every one of the remaining ten is built
+by our own code and validated in `__post_init__`. Converting them buys
+consistency and schema export, not safety. If it is done, it is done because one
+family of value objects is easier to reason about than two.
+
+**Reopen if:** a second concrete need appears — exporting a schema for external
+consumers, or a field whose invariants are currently split between `__post_init__`
+and its callers. Otherwise leave them; mixed is a cost, but so is churn on code
+that is correct.
+
+### 1.2 Issue and pull request templates
 
 **Status:** open, small, uncontroversial.
 `CONTRIBUTING.md` now describes the contribution process and what CI enforces,
@@ -53,14 +80,17 @@ contributors.
   automated traffic, so the honest single identity is the default and rotating is
   an explicit choice by the operator. The tool also identifies itself and
   respects `robots.txt`; that posture is the product.
-- **pydantic at the LLM boundary, not on the internal models.** The eleven
-  dataclasses in `models.py` are built by our own code and already validated in
-  `__post_init__`; converting them would mean a compiled-core dependency, 45
-  `dataclasses.replace` call sites, and no new validation. Model output is the one
-  genuinely untrusted input, so the schema lives in `providers/schemas.py` and
-  guards exactly that. This replaced `str(row.get("value", ""))`, which turned a
-  model's `null` into the text `"None"` — which reads as an extracted value and can
-  end up cited as evidence.
+- **pydantic at the LLM boundary, and selectively on the internal models.**
+  Model output is the one genuinely untrusted input, so the schema lives in
+  `providers/schemas.py` and guards exactly that. This replaced
+  `str(row.get("value", ""))`, which turned a model's `null` into the text
+  `"None"` — which reads as an extracted value and can end up cited as evidence.
+  `Budget` has since been converted too, as a pilot, which corrected an earlier
+  claim in this file: the "45 `dataclasses.replace` call sites" figure counted
+  `str.replace`, `Path.replace` and `datetime.replace` across the repo. The real
+  count for the eleven dataclasses was 7, and `Budget`'s share was 6. It cost 54
+  lines across 4 files. The remaining dataclasses are left alone unless a
+  concrete benefit shows up — see §1.1.
 - **Strict JSON output.** `dump_json` raises `SerializationError` naming the
   offending path rather than falling back to `default=str`. A report that quietly
   coerces a malformed field is worse than one that fails, because the corruption

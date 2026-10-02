@@ -21,7 +21,6 @@ import json
 import os
 import sys
 from collections.abc import Sequence
-from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Final
 
 if TYPE_CHECKING:
@@ -226,7 +225,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _config_from(args: argparse.Namespace) -> Config:
-    from dataclasses import replace
+    from dataclasses import replace  # local: only needed to build overrides
 
     base = Config.from_env(os.environ)
 
@@ -282,7 +281,7 @@ async def _cmd_research(args: argparse.Namespace, out: TextIO, err: TextIO) -> i
         if args.max_replans < 0:
             print("error: --max-replans must be >= 0", file=err)
             return EXIT_USAGE
-        budget = replace(budget, max_replans=args.max_replans)
+        budget = budget.with_updates(max_replans=args.max_replans)
 
     spec = ResearchSpec.build(
         args.subject,

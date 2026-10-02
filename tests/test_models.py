@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import math
-from dataclasses import FrozenInstanceError
 
 import pytest
+from pydantic import ValidationError
 
 from awsa.models import (
     Budget,
@@ -63,8 +63,24 @@ class TestBudget:
         assert Budget(max_replans=5).as_dict()["max_replans"] == 5
 
     def test_is_frozen(self) -> None:
-        with pytest.raises(FrozenInstanceError):
-            Budget().max_pages = 99  # type: ignore[misc]
+        # The property under test is that assignment is refused, not which
+        # exception class refuses it: pydantic enforces the same invariant a
+        # frozen dataclass did, with its own error type.
+        with pytest.raises(ValidationError):
+            Budget().max_pages = 99
+
+    def test_updates_still_run_the_invariants(self) -> None:
+        # The regression this guards: `model_copy(update=...)` skips validation,
+        # so a pydantic port using it would accept a negative ceiling that
+        # `Budget(...)` refuses, and `--max-replans -1` would fail silently.
+        with pytest.raises(ValueError, match="max_replans must be >= 0"):
+            Budget().with_updates(max_replans=-1)
+
+    def test_updates_leave_the_original_alone(self) -> None:
+        original = Budget.preset("standard")
+        adjusted = original.with_updates(max_replans=7)
+        assert adjusted.max_replans == 7
+        assert original.max_replans == 2
 
 
 class TestUsage:

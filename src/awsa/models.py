@@ -1,8 +1,9 @@
 """Immutable data structures shared across the agent pipeline.
 
 These are the contract between the network layer, the extractors and the
-reporter. They are frozen dataclasses so results can be cached, hashed and
-passed between threads without defensive copying.
+reporter. Most are frozen dataclasses, and ``Budget`` is a frozen pydantic model,
+so results can be cached, hashed and passed between threads without defensive
+copying. The split is deliberate and scoped: see ROADMAP.md §1.1.
 """
 
 from __future__ import annotations
@@ -16,6 +17,8 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any
 from urllib.parse import urlparse
+
+from pydantic import BaseModel, ConfigDict, model_validator
 
 __all__ = [
     "Budget",
@@ -46,13 +49,20 @@ def _sha(*parts: str) -> str:
     return h.hexdigest()[:16]
 
 
-@dataclass(frozen=True, slots=True)
-class Budget:
+class Budget(BaseModel):
     """Ceilings that bound a single agent run.
 
     Every ceiling exists because autonomous crawling without limits is how you
     accidentally hammer a host or run up an unbounded API bill.
+
+    Converted from a frozen dataclass. The invariants still run after
+    construction and still raise the same messages, rather than being expressed
+    as ``Field(ge=0)`` constraints: those messages are asserted in tests and shown
+    to whoever passed a bad ``--max-replans``, and pydantic's own wording would
+    be a usability regression for no added safety.
     """
+
+    model_config = ConfigDict(frozen=True)
 
     max_search_queries: int = 8
     max_pages: int = 20
@@ -61,7 +71,8 @@ class Budget:
     max_bytes_downloaded: int = 12 * 1024 * 1024
     max_replans: int = 2
 
-    def __post_init__(self) -> None:
+    @model_validator(mode="after")
+    def _check_ceilings(self) -> Budget:
         for name in (
             "max_search_queries",
             "max_pages",
@@ -69,12 +80,14 @@ class Budget:
             "max_bytes_downloaded",
             "max_replans",
         ):
-            if getattr(self, name) < 0:
-                msg = f"{name} must be >= 0, got {getattr(self, name)}"
+            value = getattr(self, name)
+            if value < 0:
+                msg = f"{name} must be >= 0, got {value}"
                 raise ValueError(msg)
         if self.max_wall_seconds <= 0:
             msg = f"max_wall_seconds must be > 0, got {self.max_wall_seconds}"
             raise ValueError(msg)
+        return self
 
     @classmethod
     def preset(cls, name: str) -> Budget:
@@ -111,6 +124,17 @@ class Budget:
         except KeyError:
             msg = f"unknown budget preset {name!r}; expected one of {sorted(presets)}"
             raise ValueError(msg) from None
+
+    def with_updates(self, **changes: int | float) -> Budget:
+        """Return a copy with ``changes`` applied and the invariants re-checked.
+
+        Deliberately not ``model_copy(update=...)``. That skips validation
+        entirely, so it would hand back a ``Budget`` that ``Budget(...)`` refuses
+        to build -- turning ``--max-replans -1`` from a loud failure into a run
+        that silently ignores its own re-plan ceiling. ``dataclasses.replace``
+        used to re-run ``__post_init__``, and the CLI depended on that.
+        """
+        return type(self).model_validate({**self.model_dump(), **changes})
 
     def as_dict(self) -> dict[str, Any]:
         return {

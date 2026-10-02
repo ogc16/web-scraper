@@ -99,7 +99,8 @@ awsa doctor
 
 Requires Python 3.11+. Five runtime dependencies: `httpx` (HTTP), `platformdirs`
 (cache location), `httpcore` (connection pool, pinned for DNS pinning),
-`tenacity` (retry policy), `pydantic` (validating model output).
+`tenacity` (retry policy), `pydantic` (validating model output and the `Budget`
+ceilings).
 
 ---
 
